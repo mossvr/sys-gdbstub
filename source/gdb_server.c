@@ -12,22 +12,31 @@
 
 #include "gdb_server.h"
 #include "gdb_stub.h"
-#include "poll_event.h"
+#include "poll_thread.h"
+
+#define MAX_CLIENTS 4
+
+typedef struct gdb_client
+{
+    int sock;
+    gdb_stub_t* stub;
+} gdb_client_t;
 
 struct gdb_server
 {
     int sock;
-    int client;
-    gdb_stub_t* stub;
-    struct pollfd fds[1];
-    size_t nfds;
-    poll_event_t poll;
-    bool quit;
+
+    poll_thread_t poll;
+    struct pollfd fds[MAX_CLIENTS+1u];
+    gdb_client_t clients[MAX_CLIENTS];
+
     char rx_buffer[512];
 };
 
-static void gdb_server_disconnect(gdb_server_t* server);
+static void gdb_server_update_fds(gdb_server_t* server);
+static bool gdb_server_accept(gdb_server_t* server);
 static void gdb_stub_output(gdb_stub_t* stub, char* buffer, size_t length, void* arg);
+static void gdb_client_destroy(gdb_client_t* client);
 
 #include <switch/services/bsd.h>
 
@@ -45,12 +54,9 @@ gdb_server_t* gdb_server_create(int port)
         goto err;
     }
 
-    server->client = -1;
-    server->stub = gdb_stub_create(gdb_stub_output, server);
-    if(server->stub == NULL)
+    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
     {
-        printf("gdb_stub_create failed\n");
-        goto err_1;
+        server->clients[i].sock = -1;
     }
 
     server->sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -81,16 +87,13 @@ gdb_server_t* gdb_server_create(int port)
         goto err_2;
     }
 
-    server->fds[0].fd = server->sock;
-    server->fds[0].events = POLLIN;
-    server->nfds = 1u;
-
-    if(R_FAILED(poll_event_init(&server->poll)))
+    if(R_FAILED(poll_thread_init(&server->poll)))
     {
         goto err_2;
     }
 
-    poll_event_poll(&server->poll, server->fds, server->nfds);
+    gdb_server_update_fds(server);
+    poll_thread_poll(&server->poll, server->fds, MAX_CLIENTS + 1u, -1);
 
     return server;
 err_2:
@@ -102,146 +105,263 @@ err:
     return NULL;
 }
 
-ssize_t gdb_server_waiters(gdb_server_t* server, Waiter* waiters, size_t max)
+int gdb_server_waiters(gdb_server_t* server, Waiter* waiters, size_t max)
 {
     Result res;
-    ssize_t count = 0;
+    int count = 0;
 
-    waiters[count++] = poll_event_waiter(&server->poll);
-
-#if 0
-    res = gdb_stub_get_waiter(server->stub, &waiters[count]);
-    if(R_SUCCEEDED(res))
+    if(max < MAX_CLIENTS + 1u)
     {
-        count++;
+        return -1;
     }
-#endif
+
+    waiters[count++] = poll_thread_waiter(&server->poll);
+
+    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+    {
+        gdb_client_t* client = &server->clients[i];
+        if(client->stub != NULL)
+        {
+            res = gdb_stub_get_waiter(client->stub, &waiters[count]);
+            if(R_SUCCEEDED(res))
+            {
+                count++;
+            }
+        }
+    }
 
     return count;
 }
 
-bool gdb_server_handle_event(gdb_server_t* server, s32 idx)
+static void gdb_server_update_fds(gdb_server_t* server)
+{
+    bool accept_clients = false;
+
+    memset(server->fds, 0, sizeof(server->fds));
+
+    for(size_t i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if(server->clients[i].sock == -1)
+        {
+            accept_clients = true;
+        }
+
+        server->fds[i+1u].fd = server->clients[i].sock;
+        server->fds[i+1u].events = POLLIN;
+    }
+
+    printf("%s accepting clients\n", accept_clients ? "are" : "not");
+
+    server->fds[0].fd = accept_clients ? server->sock : -1;
+    server->fds[0].events = POLLIN;
+}
+
+bool gdb_server_handle_event(gdb_server_t* server, int idx)
 {
     printf("gdb_server_handle_event (idx=%d)\n", idx);
 
     if(idx == 0)
     {
-        int res = poll_event_result(&server->poll);
-
-        if(res > 0)
+        bool update_fds = false;
+        int res = poll_thread_result(&server->poll, 0u);
+        if(res < 0)
         {
-            if(server->fds[0].fd == server->sock)
+            printf("poll error\n");
+            return false;
+        }
+        else if(res > 0)
+        {
+            // check for server socket events
+            if(server->fds[0].fd != -1)
             {
                 if((server->fds[0].events & (POLLERR | POLLHUP | POLLNVAL)) != 0u)
                 {
                     printf("server error\n");
-                    gdb_server_disconnect(server);
                     return false;
-                }
-                else if(server->client == -1 && (server->fds[0].revents & POLLIN) != 0u)
-                {
-                    server->client = accept(server->sock, NULL, NULL);
-                    printf("accepted connection\n");
-
-                    memset(server->fds, 0, sizeof(server->fds));
-                    server->fds[0].fd = server->client;
-                    server->fds[0].events = POLLIN;
-                }
-            }
-            else
-            {
-                if((server->fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0u)
-                {
-                    gdb_server_disconnect(server);
                 }
                 else if((server->fds[0].revents & POLLIN) != 0u)
                 {
-                    ssize_t count = read(server->client, server->rx_buffer, sizeof(server->rx_buffer));
-                    if(count > 0)
+                    printf("accepting client\n");
+                    if(gdb_server_accept(server))
                     {
-                        gdb_stub_input(server->stub, server->rx_buffer, count);
+                        update_fds = true;
                     }
                     else
                     {
-                        gdb_server_disconnect(server);
+                        printf("accept failed\n");
+                        // don't try to accept another client until one disconnects
+                        server->fds[0].fd = -1;
                     }
                 }
             }
 
-            if(!server->quit)
+            // check for client socket events
+            for(size_t i = 0u; i < MAX_CLIENTS; ++i)
             {
-                poll_event_poll(&server->poll, server->fds, server->nfds);
+                gdb_client_t* client = &server->clients[i];
+
+                if(server->clients[i].sock == -1)
+                {
+                    continue;
+                }
+
+                if((server->fds[i+1u].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0u)
+                {
+                    gdb_client_destroy(client);
+                    update_fds = true;
+                }
+                else if((server->fds[i+1u].revents & POLLIN) != 0u)
+                {
+                    ssize_t count = read(client->sock, server->rx_buffer, sizeof(server->rx_buffer));
+                    if(count > 0)
+                    {
+                        gdb_stub_input(client->stub, server->rx_buffer, count);
+                    }
+                    else
+                    {
+                        gdb_client_destroy(client);
+                        update_fds = true;
+                    }
+                }
             }
-        }
-        else if(res < 0)
-        {
-            printf("poll error\n");
-            server->quit = true;
+
+            // update the poll descriptors
+            if(update_fds)
+            {
+                printf("updating poll fds\n");
+                gdb_server_update_fds(server);
+
+                // test
+                bool quit = true;
+                for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+                {
+                    if(server->clients[i].sock != -1)
+                    {
+                        quit = false;
+                    }
+                }
+
+                if(quit)
+                {
+                    return false;
+                }
+            }
+
+            // start the next poll
+            poll_thread_poll(&server->poll, server->fds, MAX_CLIENTS + 1u, -1);
         }
     }
     else
     {
-        gdb_stub_handle_events(server->stub);
+        // handle gdb stub events
+        for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+        {
+            gdb_client_t* client = &server->clients[i];
+            if(client->stub != NULL)
+            {
+                gdb_stub_handle_events(client->stub);
+            }
+        }
     }
 
-    return !server->quit;
+    return true;
 }
 
 void gdb_server_destroy(gdb_server_t* server)
 {
-    if(server->client != -1)
+    // destroy the clients
+    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
     {
-        close(server->client);
+        gdb_client_destroy(&server->clients[i]);
     }
+
     if(server->sock != -1)
     {
         close(server->sock);
     }
 
-    poll_event_destroy(&server->poll);
-
-    memset(server, 0, sizeof(*server));
+    poll_thread_destroy(&server->poll);
     free(server);
 }
 
-static void gdb_server_disconnect(gdb_server_t* server)
+static bool gdb_server_accept(gdb_server_t* server)
 {
-    if(server->client != -1)
+    gdb_client_t* client = NULL;
+
+    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
     {
-        close(server->client);
-        server->client = -1;
-        printf("client disconnected\n");
+        if(server->clients[i].sock == -1)
+        {
+            client = &server->clients[i];
+            break;
+        }
     }
 
-    memset(server->fds, 0, sizeof(server->fds));
-    server->fds[0].fd = server->sock;
-    server->fds[0].events = POLLIN;
+    if(client == NULL)
+    {
+        goto err;
+    }
 
-    server->quit = true;
+    client->stub = gdb_stub_create(gdb_stub_output, client);
+    if(client->stub == NULL)
+    {
+        goto err;
+    }
+
+    client->sock = accept(server->sock, NULL, NULL);
+    if(client->sock < 0)
+    {
+        goto err_1;
+    }
+
+    printf("accepted connection\n");
+
+    return true;
+
+err_1:
+    gdb_stub_destroy(client->stub);
+    client->stub = NULL;
+    client->sock = -1;
+err:
+    return false;
 }
 
 static void gdb_stub_output(gdb_stub_t* stub, char* buffer, size_t length, void* arg)
 {
-    gdb_server_t* server = (gdb_server_t*)arg;
-
-    buffer[length] = '\0';
-    printf("gdb stub output: %s\n", buffer);
-
-    if(server->client >= 0)
+    gdb_client_t* client = (gdb_client_t*)arg;
+    if(client->sock == -1)
     {
-        while(length != 0u)
+        return;
+    }
+
+    while(length != 0u)
+    {
+        ssize_t count = write(client->sock, buffer, length);
+        if(count > 0)
         {
-            ssize_t count = write(server->client, buffer, length);
-            if(count < 0)
-            {
-                gdb_server_disconnect(server);
-                return;
-            }
-            else
-            {
-                length -= count;
-                buffer += count;
-            }
+            length -= count;
+            buffer += count;
         }
+        else
+        {
+            gdb_client_destroy(client);
+            return;
+        }
+    }
+}
+
+static void gdb_client_destroy(gdb_client_t* client)
+{
+    if(client->sock != -1)
+    {
+        printf("client disconnect\n");
+        close(client->sock);
+        client->sock = -1;
+    }
+
+    if(client->stub != NULL)
+    {
+        gdb_stub_destroy(client->stub);
+        client->stub = NULL;
     }
 }

@@ -106,7 +106,6 @@ void __attribute__((weak)) __appExit(void)
     smExit();
 }
 
-// Main program entrypoint
 int main(int argc, char* argv[])
 {
     gdb_server_t* server;
