@@ -21,17 +21,21 @@ static void poll_thread(void* arg)
 
         thread->res = 0;
         ueventClear(&thread->done_event);
+
+#if 0
         printf("poll_thread_thread: polling [ ");
         for(size_t i = 0u; i < thread->nfds; ++i)
         {
             printf("%d ", thread->fds[i].fd);
         }
         printf("]\n");
+#endif
+
         thread->res = poll(thread->fds, thread->nfds, thread->timeout);
         ueventSignal(&thread->done_event);
     }
 
-    printf("poll_thread_thread: exiting...\n");
+    printf("poll_thread: exiting...\n");
     thread->res = -1;
 }
 

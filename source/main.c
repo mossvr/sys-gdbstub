@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <twili.h>
 #include <poll.h>
 #include <unistd.h>
 
@@ -38,6 +37,8 @@ u32 __nx_applet_type = AppletType_None;
 size_t nx_inner_heap_size = INNER_HEAP_SIZE;
 char   nx_inner_heap[INNER_HEAP_SIZE];
 
+static int nxlink_sock = -1;
+
 void __libnx_initheap(void)
 {
 	void*  addr = nx_inner_heap;
@@ -67,10 +68,6 @@ void __attribute__((weak)) __appInit(void)
     if (R_FAILED(rc))
         appFatal(MAKERESULT(Module_Libnx, LibnxError_InitFail_SM));
 
-    rc = twiliInitialize();
-    if (R_FAILED(rc))
-        appFatal(rc);
-
     // Enable this if you want to use HID.
     /*rc = hidInitialize();
     if (R_FAILED(rc))
@@ -92,17 +89,29 @@ void __attribute__((weak)) __appInit(void)
         appFatal(MAKERESULT(Module_Libnx, LibnxError_InitFail_FS));
 
     fsdevMountSdmc();
+
+    consoleInit(NULL);
+
+    // redirect stdout & stderr over network to nxlink
+    nxlink_sock = nxlinkStdio();
 }
 
 void __attribute__((weak)) __appExit(void)
 {
+    if (nxlink_sock != -1)
+    {
+        close(nxlink_sock);
+        nxlink_sock = -1;
+    }
+
+    consoleExit(NULL);
+
     // Cleanup default services.
     fsdevUnmountAll();
     fsExit();
     socketExit();
     //timeExit();//Enable this if you want to use time.
     //hidExit();// Enable this if you want to use HID.
-    twiliExit();
     smExit();
 }
 
@@ -122,23 +131,41 @@ int main(int argc, char* argv[])
 
     printf("sys-gdbstub started\n");
 
+#if 1
     for(;;)
+#else
+    while(appletMainLoop())
+#endif
     {
         s32 idx;
 
+        printf("getting waiters from gdb server...\n");
         nwaiters = gdb_server_waiters(server, waiters, 8);
         if(nwaiters <= 0)
         {
             printf("gdb_server_waiters error\n");
             break;
         }
+        else
+        {
+            printf("got %lu waiters\n", nwaiters);
+        }
+        
 
+        printf("waiting for an event\n");
         waitObjects(&idx, waiters, nwaiters, UINT64_MAX);
 
         if(!gdb_server_handle_event(server, idx))
         {
+            printf("gdb_server_handle_event returned false\n");
             break;
         }
+
+#if 0
+        hidScanInput();
+        if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) break;
+        consoleUpdate(NULL);
+#endif
     }
 
     printf("exiting\n");

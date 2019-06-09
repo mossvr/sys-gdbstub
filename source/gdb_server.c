@@ -16,6 +16,8 @@
 
 #define MAX_CLIENTS 4
 
+#define logf(fmt, ...) printf("gdb_server: " fmt, ##__VA_ARGS__)
+
 typedef struct gdb_client
 {
     int sock;
@@ -42,15 +44,15 @@ static void gdb_client_destroy(gdb_client_t* client);
 
 gdb_server_t* gdb_server_create(int port)
 {
+    logf("%s\n", __PRETTY_FUNCTION__);
+
     int res;
     gdb_server_t* server;
-
-    printf("gdb_server_create\n");
 
     server = calloc(1u, sizeof(gdb_server_t));
     if(server == NULL)
     {
-        printf("calloc failed\n");
+        logf("calloc failed\n");
         goto err;
     }
 
@@ -62,7 +64,7 @@ gdb_server_t* gdb_server_create(int port)
     server->sock = socket(AF_INET, SOCK_STREAM, 0);
     if(server->sock < 0)
     {
-        printf("failed to create socket\n");
+        logf("failed to create socket\n");
         goto err_1;
     }
 
@@ -76,14 +78,14 @@ gdb_server_t* gdb_server_create(int port)
     res = bind(server->sock, (struct sockaddr*)&addr, sizeof(addr));
     if(res < 0)
     {
-        printf("bind failed\n");
+        logf("bind failed\n");
         goto err_2;
     }
 
     res = listen(server->sock, 1);
     if(res < 0)
     {
-        printf("listen failed\n");
+        logf("listen failed\n");
         goto err_2;
     }
 
@@ -107,6 +109,8 @@ err:
 
 int gdb_server_waiters(gdb_server_t* server, Waiter* waiters, size_t max)
 {
+    logf("%s\n", __PRETTY_FUNCTION__);
+
     Result res;
     int count = 0;
 
@@ -135,6 +139,8 @@ int gdb_server_waiters(gdb_server_t* server, Waiter* waiters, size_t max)
 
 static void gdb_server_update_fds(gdb_server_t* server)
 {
+    logf("%s\n", __PRETTY_FUNCTION__);
+
     bool accept_clients = false;
 
     memset(server->fds, 0, sizeof(server->fds));
@@ -150,7 +156,7 @@ static void gdb_server_update_fds(gdb_server_t* server)
         server->fds[i+1u].events = POLLIN;
     }
 
-    printf("%s accepting clients\n", accept_clients ? "are" : "not");
+    logf("%s accepting clients\n", accept_clients ? "are" : "not");
 
     server->fds[0].fd = accept_clients ? server->sock : -1;
     server->fds[0].events = POLLIN;
@@ -158,7 +164,7 @@ static void gdb_server_update_fds(gdb_server_t* server)
 
 bool gdb_server_handle_event(gdb_server_t* server, int idx)
 {
-    printf("gdb_server_handle_event (idx=%d)\n", idx);
+    logf("%s (idx=%d)\n", __PRETTY_FUNCTION__, idx);
 
     if(idx == 0)
     {
@@ -166,7 +172,7 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
         int res = poll_thread_result(&server->poll, 0u);
         if(res < 0)
         {
-            printf("poll error\n");
+            logf("poll error\n");
             return false;
         }
         else if(res > 0)
@@ -176,21 +182,24 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
             {
                 if((server->fds[0].events & (POLLERR | POLLHUP | POLLNVAL)) != 0u)
                 {
-                    printf("server error\n");
+                    logf("server error\n");
                     return false;
                 }
                 else if((server->fds[0].revents & POLLIN) != 0u)
                 {
-                    printf("accepting client\n");
+                    logf("accepting client\n");
                     if(gdb_server_accept(server))
                     {
                         update_fds = true;
                     }
                     else
                     {
-                        printf("accept failed\n");
+                        logf("accept failed\n");
                         // don't try to accept another client until one disconnects
                         server->fds[0].fd = -1;
+
+                        // give up for now
+                        return false;
                     }
                 }
             }
@@ -228,9 +237,11 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
             // update the poll descriptors
             if(update_fds)
             {
-                printf("updating poll fds\n");
+                logf("updating poll fds\n");
                 gdb_server_update_fds(server);
 
+// quit when there are no more connections
+#if 1
                 // test
                 bool quit = true;
                 for(size_t i = 0u; i < MAX_CLIENTS; ++i)
@@ -245,10 +256,13 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
                 {
                     return false;
                 }
+#endif
             }
 
+            logf("starting poll\n");
             // start the next poll
             poll_thread_poll(&server->poll, server->fds, MAX_CLIENTS + 1u, -1);
+            logf("poll started\n");
         }
     }
     else
@@ -264,11 +278,14 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
         }
     }
 
+    logf("returning from %s\n", __PRETTY_FUNCTION__);
     return true;
 }
 
 void gdb_server_destroy(gdb_server_t* server)
 {
+    logf("%s\n", __PRETTY_FUNCTION__);
+    
     // destroy the clients
     for(size_t i = 0u; i < MAX_CLIENTS; ++i)
     {
@@ -286,6 +303,8 @@ void gdb_server_destroy(gdb_server_t* server)
 
 static bool gdb_server_accept(gdb_server_t* server)
 {
+    logf("%s\n", __PRETTY_FUNCTION__);
+
     gdb_client_t* client = NULL;
 
     for(size_t i = 0u; i < MAX_CLIENTS; ++i)
@@ -314,7 +333,7 @@ static bool gdb_server_accept(gdb_server_t* server)
         goto err_1;
     }
 
-    printf("accepted connection\n");
+    logf("accepted connection\n");
 
     return true;
 
@@ -328,6 +347,8 @@ err:
 
 static void gdb_stub_output(gdb_stub_t* stub, char* buffer, size_t length, void* arg)
 {
+    logf("%s (length=%lu)\n", __PRETTY_FUNCTION__, length);
+
     gdb_client_t* client = (gdb_client_t*)arg;
     if(client->sock == -1)
     {
@@ -352,9 +373,11 @@ static void gdb_stub_output(gdb_stub_t* stub, char* buffer, size_t length, void*
 
 static void gdb_client_destroy(gdb_client_t* client)
 {
+    logf("%s\n", __PRETTY_FUNCTION__);
+
     if(client->sock != -1)
     {
-        printf("client disconnect\n");
+        logf("client disconnect\n");
         close(client->sock);
         client->sock = -1;
     }
