@@ -107,7 +107,4 @@ typedef struct
 } debug_event_t;
 
 
-Result svcSetHardwareBreakPoint(u32 id, u64 flags, u64 value);
-
-
 #endif /* SOURCE_DBG_SVC_H_ */

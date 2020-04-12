@@ -143,7 +143,7 @@ static void list_processes(void)
     Result res;
     u64 our_pid;
     u64 pids[100];
-    u32 num_pids = 0;
+    s32 num_pids = 0;
 
     // get our pid
     res = svcGetProcessId(&our_pid, CUR_PROCESS_HANDLE);
@@ -159,7 +159,7 @@ static void list_processes(void)
     }
 
     printf("processes: \n");
-    for(u32 i = 0u; i < num_pids; ++i)
+    for(s32 i = 0; i < num_pids; ++i)
     {
         Handle proc;
         debug_event_t event;
@@ -196,7 +196,7 @@ static bool get_pid_by_name(const char* name, u64* pid)
     Result res;
     u64 our_pid;
     u64 pids[100];
-    u32 num_pids = 0;
+    s32 num_pids = 0;
 
     // get our pid
     res = svcGetProcessId(&our_pid, CUR_PROCESS_HANDLE);
@@ -211,7 +211,7 @@ static bool get_pid_by_name(const char* name, u64* pid)
         return false;
     }
 
-    for(u32 i = 0u; i < num_pids; ++i)
+    for(s32 i = 0; i < num_pids; ++i)
     {
         Handle proc;
         debug_event_t event;

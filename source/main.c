@@ -10,25 +10,6 @@
 #include "error.h"
 #include "gdb_server.h"
 
-static const SocketInitConfig socket_config = {
-    .bsdsockets_version = 1,
-
-    .tcp_tx_buf_size        = 0x2000,
-    .tcp_rx_buf_size        = 0x2000,
-    .tcp_tx_buf_max_size    = 0x4000,
-    .tcp_rx_buf_max_size    = 0x4000,
-
-    .udp_tx_buf_size = 0,
-    .udp_rx_buf_size = 0,
-
-    .sb_efficiency = 2,
-
-    .serialized_out_addrinfos_max_size  = 0x1000,
-    .serialized_out_hostent_max_size    = 0x200,
-    .bypass_nsd                         = false,
-    .dns_timeout                        = 0,
-};
-
 // Sysmodules should not use applet*.
 u32 __nx_applet_type = AppletType_None;
 
@@ -55,7 +36,7 @@ void __libnx_initheap(void)
 static void appFatal(Result err)
 {
     printf("fatal error: 0x%X (%d-%d)\n", err, R_MODULE(err), R_DESCRIPTION(err));
-    fatalSimple(err);
+    fatalThrow(err);
 }
 
 // Init/exit services, update as needed.
@@ -68,19 +49,7 @@ void __attribute__((weak)) __appInit(void)
     if (R_FAILED(rc))
         appFatal(MAKERESULT(Module_Libnx, LibnxError_InitFail_SM));
 
-    // Enable this if you want to use HID.
-    /*rc = hidInitialize();
-    if (R_FAILED(rc))
-        fatalSimple(MAKERESULT(Module_Libnx, LibnxError_InitFail_HID));*/
-
-    //Enable this if you want to use time.
-    /*rc = timeInitialize();
-    if (R_FAILED(rc))
-        fatalSimple(MAKERESULT(Module_Libnx, LibnxError_InitFail_Time));
-
-    __libnx_init_time();*/
-
-    rc = socketInitialize(&socket_config);
+    rc = socketInitializeDefault();
     if (R_FAILED(rc))
         appFatal(rc);
 
@@ -110,8 +79,6 @@ void __attribute__((weak)) __appExit(void)
     fsdevUnmountAll();
     fsExit();
     socketExit();
-    //timeExit();//Enable this if you want to use time.
-    //hidExit();// Enable this if you want to use HID.
     smExit();
 }
 

@@ -52,7 +52,7 @@ Result poll_thread_init(poll_thread_t* thread)
     ueventCreate(&thread->done_event, false);
     ueventCreate(&thread->wake_event, true);
 
-    res = threadCreate(&thread->t, poll_thread, thread, 0x1000, 0x2C, -2);
+    res = threadCreate(&thread->t, poll_thread, thread, NULL, 0x1000, 0x2C, -2);
     if(R_FAILED(res))
     {
         printf("poll_thread_init: threadCreate failed\n");
