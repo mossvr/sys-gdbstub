@@ -984,6 +984,11 @@ void gdb_stub_input(gdb_stub_t* stub, const char* buffer, size_t length)
 
 void gdb_stub_destroy(gdb_stub_t* stub)
 {
+    if (stub->session != INVALID_HANDLE)
+    {
+        svcCloseHandle(stub->session);
+        stub->session = INVALID_HANDLE;
+    }
     memset(stub, 0, sizeof(*stub));
     free(stub);
 }
