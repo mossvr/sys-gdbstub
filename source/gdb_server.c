@@ -16,7 +16,11 @@
 
 #define MAX_CLIENTS 4
 
+#if 0
 #define logf(fmt, ...) printf("gdb_server: " fmt, ##__VA_ARGS__)
+#else
+#define logf(fmt, ...)
+#endif
 
 typedef struct gdb_client
 {

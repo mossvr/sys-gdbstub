@@ -47,6 +47,7 @@ struct gdb_stub
     gdb_stub_thread_t thread[MAX_THREADS];
     u32 selected_thread;
     u64 code_addr;
+    u32 exception_type;
 
     gdb_stub_breakpoint_t hw_breakpoints[MAX_HW_BREAKPOINTS];
 
@@ -542,6 +543,7 @@ static bool gdb_stub_cmd_query(gdb_stub_t* stub, char* packet, size_t length)
 static bool gdb_stub_cmd_set(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_cmd_set\n");
+    logf("%s not implemented\n", __FUNCTION__);
     gdb_stub_send_packet(stub, "");
     return true;
 }
@@ -681,18 +683,21 @@ static bool gdb_stub_cmd_read_registers(gdb_stub_t* stub, char* packet, size_t l
 static bool gdb_stub_cmd_write_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_cmd_write_registers\n");
+    logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
 static bool gdb_stub_cmd_read_register(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_cmd_read_register\n");
+    logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
 static bool gdb_stub_cmd_write_register(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_cmd_write_register\n");
+    logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
@@ -742,6 +747,7 @@ static bool gdb_stub_cmd_read_memory(gdb_stub_t* stub, char* packet, size_t leng
 static bool gdb_stub_cmd_write_memory(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_cmd_write_memory\n");
+    logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
@@ -795,7 +801,6 @@ static bool gdb_stub_cmd_continue(gdb_stub_t* stub, char* packet, size_t length)
         return false;
     }
 
-    //gdb_stub_send_packet(stub, "OK");
     return true;
 }
 
@@ -812,10 +817,50 @@ static bool gdb_stub_cmd_step(gdb_stub_t* stub, char* packet, size_t length)
     return true;
 }
 
+static void gdb_stub_send_stop_reply(gdb_stub_t* stub)
+{
+    const char* reason = "";
+
+    switch(stub->exception_type)
+    {
+    case DEBUG_EXCEPTION_TRAP:
+        reason = "swbreak";
+        break;
+    case DEBUG_EXCEPTION_INSTRUCTION_ABORT:
+        break;
+    case DEBUG_EXCEPTION_DATA_ABORT_MISC:
+        break;
+    case DEBUG_EXCEPTION_PC_SP_ALIGNMENT_FAULT:
+        break;
+    case DEBUG_EXCEPTION_DEBUGGER_ATTACHED:
+        break;
+    case DEBUG_EXCEPTION_BREAKPOINT:
+        reason = "hwbreak";
+        break;
+    case DEBUG_EXCEPTION_USER_BREAK:
+        break;
+    case DEBUG_EXCEPTION_DEBUGGER_BREAK:
+        break;
+    case DEBUG_EXCEPTION_BAD_SVC_ID:
+        break;
+    case DEBUG_EXCEPTION_SERROR:
+        break;
+    }
+
+    if(*reason == '\0')
+    {
+        gdb_stub_send_signal(stub, 0u);
+    }
+    else
+    {
+        gdb_stub_send_trap(stub, reason);
+    }
+}
+
 static bool gdb_stub_cmd_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_cmd_get_halt_reason\n");
-    gdb_stub_send_signal(stub, 0u);
+    gdb_stub_send_stop_reply(stub);
     return true;
 }
 
@@ -1030,34 +1075,8 @@ static void print_debug_event(debug_event_t* event)
 
 static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* exception)
 {
-    const char* reason = "";
-
-    switch(exception->type)
-    {
-    case DEBUG_EXCEPTION_TRAP:
-        reason = "swbreak";
-        break;
-    case DEBUG_EXCEPTION_INSTRUCTION_ABORT:
-        break;
-    case DEBUG_EXCEPTION_DATA_ABORT_MISC:
-        break;
-    case DEBUG_EXCEPTION_PC_SP_ALIGNMENT_FAULT:
-        break;
-    case DEBUG_EXCEPTION_DEBUGGER_ATTACHED:
-        break;
-    case DEBUG_EXCEPTION_BREAKPOINT:
-        reason = "hwbreak";
-        break;
-    case DEBUG_EXCEPTION_USER_BREAK:
-        break;
-    case DEBUG_EXCEPTION_DEBUGGER_BREAK:
-        break;
-    case DEBUG_EXCEPTION_BAD_SVC_ID:
-        break;
-    case DEBUG_EXCEPTION_SERROR:
-        break;
-    }
-
+    stub->exception_type = exception->type;
+    
     for(u32 i = 0u; i < MAX_THREADS; ++i)
     {
         if(stub->thread[i].tid != UINT64_MAX)
@@ -1066,15 +1085,7 @@ static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* except
         }
     }
 
-    logf("sending signal\n");
-    if(*reason == '\0')
-    {
-        gdb_stub_send_signal(stub, 0u);
-    }
-    else
-    {
-        gdb_stub_send_trap(stub, reason);
-    }
+    gdb_stub_send_stop_reply(stub);
 }
 
 static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
