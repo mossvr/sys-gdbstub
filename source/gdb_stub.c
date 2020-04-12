@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdbool.h>
 
 #include <switch.h>
@@ -14,7 +15,11 @@
 #define MAX_THREADS 20u
 #define MAX_HW_BREAKPOINTS 4u
 
+#if 1
 #define logf(fmt, ...) printf("gdb_stub: " fmt, ##__VA_ARGS__)
+#else
+#define logf(fmt, ...)
+#endif
 
 typedef enum
 {
@@ -52,6 +57,8 @@ struct gdb_stub
     gdb_stub_breakpoint_t hw_breakpoints[MAX_HW_BREAKPOINTS];
 
     uint8_t mem[512];
+    char xfer[8192];
+    size_t xfer_pos;
 
     struct
     {
@@ -119,14 +126,49 @@ typedef struct
 
 static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length);
 
 static const gdb_query_handler_t query_handler[] =
 {
         { "Offsets", gdb_stub_query_offsets },
         { "Supported", gdb_stub_query_supported },
+        { "Xfer", gdb_stub_query_xfer },
+};
+
+typedef struct
+{
+    const char* object;
+    const char* op;
+    const char* annex;
+    size_t offset;
+    size_t length;
+} gdb_xfer_req_t;
+
+typedef struct
+{
+    const char* object;
+    bool (*func)(gdb_stub_t* stub, gdb_xfer_req_t* req);
+} gdb_xfer_handler_t;
+
+static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req);
+
+static const gdb_xfer_handler_t xfer_handler[] =
+{
+    { "osdata", gdb_stub_xfer_osdata },
 };
 
 static const char hex_chars[] = "0123456789abcdef";
+
+static const char* proc_list_header =
+        "<osdata type=\"processes\">\n";
+
+static const char* proc_list_fmt =
+        "<item>\n"
+        "<column name=\"pid\">%u</column>\n"
+        "<column name=\"command\">%s</column>\n"
+        "</item>\n";
+
+static const char* proc_list_footer = "</osdata>";
 
 static const char* thread_list_header =
         "<?xml version=\"1.0\"?>\n"
@@ -138,59 +180,6 @@ static const char* thread_list_fmt = "<thread id=\"%s\" name=\"%s\" />";
 static void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet);
 static void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err);
 static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal);
-
-static void list_processes(void)
-{
-    Result res;
-    u64 our_pid;
-    u64 pids[100];
-    s32 num_pids = 0;
-
-    // get our pid
-    res = svcGetProcessId(&our_pid, CUR_PROCESS_HANDLE);
-    if (R_FAILED(res))
-    {
-        return;
-    }
-
-    res = svcGetProcessList(&num_pids, pids, sizeof(pids));
-    if (R_FAILED(res))
-    {
-        return;
-    }
-
-    printf("processes: \n");
-    for(s32 i = 0; i < num_pids; ++i)
-    {
-        Handle proc;
-        debug_event_t event;
-
-        // don't try to debug our process
-        if (pids[i] == our_pid)
-        {
-            continue;
-        }
-
-        res = svcDebugActiveProcess(&proc, pids[i]);
-        if (R_FAILED(res))
-        {
-            continue;
-        }
-
-        while(R_SUCCEEDED(svcGetDebugEvent((u8*)&event, proc)))
-        {
-            if (event.type == DEBUG_EVENT_ATTACH_PROCESS)
-            {
-                printf("\t%s (0x%lX)\n", event.attach_process.process_name, event.attach_process.process_id);
-                break;
-            }
-        }
-
-        svcCloseHandle(proc);
-    }
-
-    printf("done\n");
-}
 
 static bool get_pid_by_name(const char* name, u64* pid)
 {
@@ -271,18 +260,6 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
         stub->thread[i].tid = UINT64_MAX;
     }
 
-
-    //list_processes();
-
-#if 0
-    Result res;
-    res = svcDebugActiveProcess(&stub->session, 0x85);
-    if(R_FAILED(res))
-    {
-        logf("svcDebugActiveProcess failed (%d-%d)\n", R_MODULE(res), R_DESCRIPTION(res));
-        goto err_1;
-    }
-#else
     u64 pid;
     if(!get_pid_by_name("usb", &pid))
     {
@@ -293,7 +270,7 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     {
         logf("debugging 0x%lX\n", pid);
     }
-    
+
 
     res = svcDebugActiveProcess(&stub->session, pid);
     if(R_FAILED(res))
@@ -303,7 +280,6 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     }
 
     logf("svcDebugActiveProcess succeeded\n");
-#endif
 
     return stub;
 err_1:
@@ -505,11 +481,7 @@ static void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length)
     {
         if(packet[0] == pkt_handler[i].type)
         {
-            if(!pkt_handler[i].func(stub, packet, length))
-            {
-                gdb_stub_send_error(stub, 0u);
-            }
-            handled = true;
+            handled = pkt_handler[i].func(stub, packet, length);
             break;
         }
     }
@@ -524,28 +496,22 @@ static bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_query\n");
 
-    for(u32 i = 0u; i < sizeof(query_handler) / sizeof(query_handler[0]); ++i)
+    for (size_t i = 0u; i < sizeof(query_handler) / sizeof(query_handler[0]); ++i)
     {
-        if(memcmp(&packet[1], query_handler[i].query, strlen(query_handler[i].query)) == 0)
+        if (strncmp(&packet[1], query_handler[i].query, strlen(query_handler[i].query)) == 0)
         {
-            if(!query_handler[i].func(stub, packet, length))
-            {
-                return false;
-            }
+            return query_handler[i].func(stub, packet, length);
         }
-
     }
 
-    gdb_stub_send_packet(stub, "");
-    return true;
+    return false;
 }
 
 static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_set\n");
+    logf("%s\n", __FUNCTION__);
     logf("%s not implemented\n", __FUNCTION__);
-    gdb_stub_send_packet(stub, "");
-    return true;
+    return false;
 }
 
 static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
@@ -596,20 +562,15 @@ static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
             }
             else
             {
-                return false;
+                gdb_stub_send_error(stub, 0u);
             }
-        }
-        else
-        {
-            return false;
+
+            return true;
         }
         break;
-    default:
-        gdb_stub_send_packet(stub, "");
-        return true;
     }
 
-    return true;
+    return false;
 }
 
 static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
@@ -646,18 +607,12 @@ static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_
             }
 
             gdb_stub_send_packet(stub, "OK");
-        }
-        else
-        {
-            return false;
+            return true;
         }
         break;
-    default:
-        gdb_stub_send_packet(stub, "");
-        return true;
     }
 
-    return true;
+    return false;
 }
 
 static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length)
@@ -882,8 +837,244 @@ static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length
 static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_query_supported\n");
-    gdb_stub_send_packet(stub, "hwbreak+");
+    gdb_stub_send_packet(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+");
     return true;
+}
+
+static bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length)
+{
+    logf("%s\n", __FUNCTION__);
+    size_t index = 0;
+    gdb_xfer_req_t req;
+    req.object = "";
+    req.op = "";
+    req.annex = "";
+    req.offset = 0u;
+    req.length = 0u;
+
+    char* token = packet;
+    char* pos = packet;
+
+    while (token != NULL)
+    {
+        while (*pos != '\0' && *pos != ':')
+        {
+            pos++;
+        }
+
+        bool last = *pos == '\0';
+        if (!last)
+        {
+            *pos = '\0';
+            pos++;
+        }
+
+        switch(index)
+        {
+        case 1:
+            req.object = token;
+            break;
+        case 2:
+            req.op = token;
+
+            if (strcmp(req.op, "read") != 0)
+            {
+                logf("qXfer: unsupported op: %s\n", req.op);
+                return false;
+            }
+            break;
+        case 3:
+            req.annex = token;
+            break;
+        case 4:
+        {
+            char* end = token;
+            // should be offset,length
+            req.offset = strtoul(end, &end, 16);
+            if (*end == ',')
+            {
+                end++;
+                req.length = strtoul(end, &end, 16);
+            }
+            break;
+        }
+        }
+
+        index++;
+        token = last ? NULL : pos;
+    }
+
+    logf("xfer (object=%s, op=%s, annex=%s, offset=%lu, length=%lu)\n", req.object, req.op, req.annex, req.offset, req.length);
+
+    for(size_t i = 0u; i < sizeof(xfer_handler) / sizeof(xfer_handler[0]); ++i)
+    {
+        if (strncmp(req.object, xfer_handler[i].object, strlen(xfer_handler[i].object)) == 0)
+        {
+            return xfer_handler[i].func(stub, &req);
+        }
+    }
+
+    return false;
+}
+
+static bool xfer_printf(gdb_stub_t* stub, const char* fmt, ...)
+{
+    int remaining = sizeof(stub->xfer) - stub->xfer_pos;
+
+    if (remaining > 0)
+    {
+        va_list arglist;
+        va_start(arglist, fmt);
+        stub->xfer_pos += vsnprintf(&stub->xfer[stub->xfer_pos], remaining, fmt, arglist);
+        va_end(arglist);
+
+        if (stub->xfer_pos >= sizeof(stub->xfer))
+        {
+            stub->xfer_pos = sizeof(stub->xfer) - 1u;
+            logf("%s truncated (len=%lu)\n", stub->xfer_pos);
+            return false;
+        }
+
+        return true;
+    }
+    
+    logf("%s truncated (len=%lu)\n", stub->xfer_pos);
+    return false;
+}
+
+static bool xfer_snap_processes(gdb_stub_t* stub)
+{
+    Result res;
+    u64 our_pid;
+    u64 pids[100];
+    s32 num_pids = 0;
+
+    stub->xfer[0] = '\0';
+    stub->xfer_pos = 0u;
+
+    if (!xfer_printf(stub, "%s", proc_list_header))
+    {
+        goto err;
+    }
+
+    // get our pid
+    res = svcGetProcessId(&our_pid, CUR_PROCESS_HANDLE);
+    if (R_FAILED(res))
+    {
+        goto err;
+    }
+
+    // get the process list
+    res = svcGetProcessList(&num_pids, pids, sizeof(pids) / sizeof(pids[0]));
+    if (R_FAILED(res))
+    {
+        goto err;
+    }
+
+    logf("printing %d processes\n", num_pids);
+    for(s32 i = 0; i < num_pids; ++i)
+    {
+        Handle proc;
+        debug_event_t event;
+
+        // don't try to debug our process
+        if (pids[i] == our_pid)
+        {
+            continue;
+        }
+
+        logf("\t\tdebugging pid %lu\n", pids[i]);
+        res = svcDebugActiveProcess(&proc, pids[i]);
+        if (R_FAILED(res))
+        {
+            logf("failed\n");
+            continue;
+        }
+
+        bool ok = true;
+
+        while(R_SUCCEEDED(svcGetDebugEvent((u8*)&event, proc)))
+        {
+            if (event.type == DEBUG_EVENT_ATTACH_PROCESS)
+            {
+                if (!xfer_printf(stub, proc_list_fmt,
+                    event.attach_process.process_id, event.attach_process.process_name))
+                {
+                    ok = false;
+                    
+                }
+                break;
+            }
+        }
+
+        svcCloseHandle(proc);
+        if (!ok)
+        {
+            logf("failed to print process (pid=%u)\n", pids[i]);
+            goto err;
+        }
+    }
+    
+    if (!xfer_printf(stub, "%s", proc_list_footer))
+    {
+        goto err;
+    }
+
+    return true;
+
+err:
+    stub->xfer[0] = '\0';
+    stub->xfer_pos = 0u;
+    return false;
+}
+
+static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req)
+{
+    logf("%s\n", __FUNCTION__);
+
+    // TODO: check if the annex is different than the snapshot
+    if (req->offset == 0u)
+    {
+        if (*req->annex == '\0' ||
+            strcmp(req->annex, "processes") == 0)
+        {
+            if (!xfer_snap_processes(stub))
+            {
+                gdb_stub_send_error(stub, 0u);
+                return true;
+            }
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    if (stub->xfer_pos != 0u)
+    {
+        logf("xfer_pos=%lu\n", stub->xfer_pos);
+        bool more = true;
+        size_t start = req->offset;
+        size_t end = req->offset + req->length;
+
+        if (end >= stub->xfer_pos)
+        {
+            end = stub->xfer_pos;
+            more = false;
+        }
+
+        logf("start=%lu, end=%lu, more=%d\n", start, end, more ? 1u : 0u);
+        gdb_stub_packet_begin(stub);
+        gdb_stub_packet_write(stub, more ? "m" : "l", 1u);
+        if (start < end)
+        {
+            gdb_stub_packet_write(stub, &stub->xfer[start], end - start);
+        }
+        gdb_stub_packet_end(stub);
+        return true;
+    }
+
+    return false;
 }
 
 static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
