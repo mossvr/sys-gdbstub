@@ -76,39 +76,39 @@ typedef struct
 {
     char type;
     bool (*func)(gdb_stub_t* stub, char* packet, size_t length);
-} gdb_cmd_handler_t;
+} gdb_pkt_handler_t;
 
-static bool gdb_stub_cmd_query(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_set(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_read_registers(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_write_registers(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_read_register(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_write_register(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_read_memory(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_write_memory(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_continue(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_step(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_cmd_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_write_memory(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length);
 
-static const gdb_cmd_handler_t cmd_handler[] =
+static const gdb_pkt_handler_t pkt_handler[] =
 {
-        { 'q', gdb_stub_cmd_query },
-        { 'Q', gdb_stub_cmd_set },
-        { 'Z', gdb_stub_cmd_insert_breakpoint },
-        { 'z', gdb_stub_cmd_remove_breakpoint },
-        { 'g', gdb_stub_cmd_read_registers },
-        { 'G', gdb_stub_cmd_write_registers },
-        { 'p', gdb_stub_cmd_read_register },
-        { 'P', gdb_stub_cmd_write_register },
-        { 'm', gdb_stub_cmd_read_memory },
-        { 'M', gdb_stub_cmd_write_memory },
-        { 'X', gdb_stub_cmd_write_memory_bin },
-        { 'c', gdb_stub_cmd_continue },
-        { 's', gdb_stub_cmd_step },
-        { '?', gdb_stub_cmd_get_halt_reason },
+        { 'q', gdb_stub_pkt_query },
+        { 'Q', gdb_stub_pkt_set },
+        { 'Z', gdb_stub_pkt_insert_breakpoint },
+        { 'z', gdb_stub_pkt_remove_breakpoint },
+        { 'g', gdb_stub_pkt_read_registers },
+        { 'G', gdb_stub_pkt_write_registers },
+        { 'p', gdb_stub_pkt_read_register },
+        { 'P', gdb_stub_pkt_write_register },
+        { 'm', gdb_stub_pkt_read_memory },
+        { 'M', gdb_stub_pkt_write_memory },
+        { 'X', gdb_stub_pkt_write_memory_bin },
+        { 'c', gdb_stub_pkt_continue },
+        { 's', gdb_stub_pkt_step },
+        { '?', gdb_stub_pkt_get_halt_reason },
 };
 
 typedef struct
@@ -495,17 +495,17 @@ static inline u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid)
     return UINT32_MAX;
 }
 
-static void gdb_stub_cmd(gdb_stub_t* stub, char* packet, size_t length)
+static void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length)
 {
     bool handled = false;
 
     logf("got packet (%s)\n", packet);
 
-    for(u32 i = 0u; i < sizeof(cmd_handler) / sizeof(cmd_handler[0]); ++i)
+    for(u32 i = 0u; i < sizeof(pkt_handler) / sizeof(pkt_handler[0]); ++i)
     {
-        if(packet[0] == cmd_handler[i].type)
+        if(packet[0] == pkt_handler[i].type)
         {
-            if(!cmd_handler[i].func(stub, packet, length))
+            if(!pkt_handler[i].func(stub, packet, length))
             {
                 gdb_stub_send_error(stub, 0u);
             }
@@ -520,9 +520,9 @@ static void gdb_stub_cmd(gdb_stub_t* stub, char* packet, size_t length)
     }
 }
 
-static bool gdb_stub_cmd_query(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_query\n");
+    logf("gdb_stub_pkt_query\n");
 
     for(u32 i = 0u; i < sizeof(query_handler) / sizeof(query_handler[0]); ++i)
     {
@@ -540,17 +540,17 @@ static bool gdb_stub_cmd_query(gdb_stub_t* stub, char* packet, size_t length)
     return true;
 }
 
-static bool gdb_stub_cmd_set(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_set\n");
+    logf("gdb_stub_pkt_set\n");
     logf("%s not implemented\n", __FUNCTION__);
     gdb_stub_send_packet(stub, "");
     return true;
 }
 
-static bool gdb_stub_cmd_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_insert_breakpoint\n");
+    logf("gdb_stub_pkt_insert_breakpoint\n");
     u64 addr;
 
     switch(packet[1])
@@ -612,9 +612,9 @@ static bool gdb_stub_cmd_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
     return true;
 }
 
-static bool gdb_stub_cmd_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_remove_breakpoint\n");
+    logf("gdb_stub_pkt_remove_breakpoint\n");
     u64 addr;
 
     switch(packet[1])
@@ -660,9 +660,9 @@ static bool gdb_stub_cmd_remove_breakpoint(gdb_stub_t* stub, char* packet, size_
     return true;
 }
 
-static bool gdb_stub_cmd_read_registers(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_read_registers\n");
+    logf("gdb_stub_pkt_read_registers\n");
 
     u32 idx = stub->selected_thread;
 
@@ -680,30 +680,30 @@ static bool gdb_stub_cmd_read_registers(gdb_stub_t* stub, char* packet, size_t l
     return true;
 }
 
-static bool gdb_stub_cmd_write_registers(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_write_registers\n");
+    logf("gdb_stub_pkt_write_registers\n");
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
-static bool gdb_stub_cmd_read_register(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_read_register\n");
+    logf("gdb_stub_pkt_read_register\n");
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
-static bool gdb_stub_cmd_write_register(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_write_register\n");
+    logf("gdb_stub_pkt_write_register\n");
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
-static bool gdb_stub_cmd_read_memory(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_read_memory\n");
+    logf("gdb_stub_pkt_read_memory\n");
 
     Result res;
     u64 addr, size;
@@ -744,16 +744,16 @@ static bool gdb_stub_cmd_read_memory(gdb_stub_t* stub, char* packet, size_t leng
     return true;
 }
 
-static bool gdb_stub_cmd_write_memory(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_write_memory(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_write_memory\n");
+    logf("gdb_stub_pkt_write_memory\n");
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
-static bool gdb_stub_cmd_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_write_memory_bin\n");
+    logf("gdb_stub_pkt_write_memory_bin\n");
     u64 addr, write_len;
     size_t pos = 0u;
 
@@ -791,9 +791,9 @@ static bool gdb_stub_cmd_write_memory_bin(gdb_stub_t* stub, char* packet, size_t
     return true;
 }
 
-static bool gdb_stub_cmd_continue(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_continue\n");
+    logf("gdb_stub_pkt_continue\n");
 
     Result res = svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u);
     if(R_FAILED(res))
@@ -804,9 +804,9 @@ static bool gdb_stub_cmd_continue(gdb_stub_t* stub, char* packet, size_t length)
     return true;
 }
 
-static bool gdb_stub_cmd_step(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_step\n");
+    logf("gdb_stub_pkt_step\n");
 
     Result res = svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u);
     if(R_FAILED(res))
@@ -857,9 +857,9 @@ static void gdb_stub_send_stop_reply(gdb_stub_t* stub)
     }
 }
 
-static bool gdb_stub_cmd_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length)
+static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_cmd_get_halt_reason\n");
+    logf("gdb_stub_pkt_get_halt_reason\n");
     gdb_stub_send_stop_reply(stub);
     return true;
 }
@@ -958,7 +958,7 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
                 stub->rx.packet[stub->rx.pos] = '\0';
 
                 gdb_stub_putc(stub, '+');
-                gdb_stub_cmd(stub, stub->rx.packet, stub->rx.pos);
+                gdb_stub_pkt(stub, stub->rx.packet, stub->rx.pos);
             }
             else
             {
