@@ -173,7 +173,7 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
     if(idx == 0)
     {
         bool update_fds = false;
-        int res = poll_thread_result(&server->poll, 0u);
+        int res = poll_thread_result(&server->poll);
         if(res < 0)
         {
             logf("poll error\n");
@@ -258,6 +258,7 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
 
                 if(quit)
                 {
+                    logf("quitting...\n");
                     return false;
                 }
 #endif

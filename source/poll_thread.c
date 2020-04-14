@@ -5,98 +5,158 @@
 
 #include "poll_thread.h"
 
+#if 0
+#define logf(fmt, ...) printf("poll_thread: " fmt, ##__VA_ARGS__)
+#else
+#define logf(fmt, ...)
+#endif
+
+
 static void poll_thread(void* arg)
 {
     poll_thread_t* thread = (poll_thread_t*)arg;
 
-    ueventSignal(&thread->done_event);
+    mutexLock(&thread->lock);
+    thread->state = POLL_STATE_IDLE;
+    condvarWakeAll(&thread->cond);
 
-    while(!thread->quit)
+    while (true)
     {
-        waitSingle(waiterForUEvent(&thread->wake_event), UINT64_MAX);
-        if(thread->quit || thread->fds == NULL || thread->nfds == 0)
+        while (thread->state != POLL_STATE_REQUEST &&
+            thread->state != POLL_STATE_QUIT)
+        {
+            condvarWait(&thread->cond, &thread->lock);
+        }
+
+        if (thread->state == POLL_STATE_QUIT)
         {
             break;
         }
 
-        thread->res = 0;
-        ueventClear(&thread->done_event);
+        thread->state = POLL_STATE_POLLING;
+        mutexUnlock(&thread->lock);
 
-#if 0
-        printf("poll_thread_thread: polling [ ");
-        for(size_t i = 0u; i < thread->nfds; ++i)
-        {
-            printf("%d ", thread->fds[i].fd);
-        }
-        printf("]\n");
-#endif
-
+        logf("polling (nfds=%lu, timeout=%d)\n", thread->nfds, thread->timeout);
         thread->res = poll(thread->fds, thread->nfds, thread->timeout);
-        ueventSignal(&thread->done_event);
+        logf("done polling (res=%d)\n", thread->res);
+
+        mutexLock(&thread->lock);
+        thread->state = POLL_STATE_DONE;
+        condvarWakeAll(&thread->cond);
+        ueventSignal(&thread->event);
     }
 
-    printf("poll_thread: exiting...\n");
-    thread->res = -1;
+    mutexUnlock(&thread->lock);
+
+    logf("exiting...\n");
 }
 
 Result poll_thread_init(poll_thread_t* thread)
 {
+    logf("%s\n", __FUNCTION__);
+    
     Result res;
 
     memset(thread, 0, sizeof(*thread));
+    thread->state = POLL_STATE_INIT;
     thread->fds = NULL;
     thread->nfds = 0;
-    thread->res = -1;
-    thread->quit = false;
+    thread->res = -2;
 
-    ueventCreate(&thread->done_event, false);
-    ueventCreate(&thread->wake_event, true);
+    mutexInit(&thread->lock);
+    condvarInit(&thread->cond);
+    ueventCreate(&thread->event, true);
 
     res = threadCreate(&thread->t, poll_thread, thread, NULL, 0x1000, 0x2C, -2);
-    if(R_FAILED(res))
+    if (R_FAILED(res))
     {
-        printf("poll_thread_init: threadCreate failed\n");
+        logf("threadCreate failed\n");
         return res;
     }
 
     res = threadStart(&thread->t);
-    if(R_FAILED(res))
+    if (R_FAILED(res))
     {
-        printf("poll_thread_init: threadStart failed\n");
+        logf("threadStart failed\n");
         threadClose(&thread->t);
+        return res;
     }
+
+    mutexLock(&thread->lock);
+    while (thread->state == POLL_STATE_INIT)
+    {
+        condvarWait(&thread->cond, &thread->lock);
+    }
+    mutexUnlock(&thread->lock);
 
     return res;
 }
 
 Waiter poll_thread_waiter(poll_thread_t* thread)
 {
-    return waiterForUEvent(&thread->done_event);
+    return waiterForUEvent(&thread->event);
 }
 
-int poll_thread_result(poll_thread_t* event, u64 timeout_ns)
+int poll_thread_result(poll_thread_t* thread)
 {
-    if(R_SUCCEEDED(waitSingle(waiterForUEvent(&event->done_event), timeout_ns)))
+    logf("%s\n", __FUNCTION__);
+    int res;
+
+    mutexLock(&thread->lock);
+    if (thread->state != POLL_STATE_DONE)
     {
-        return event->res;
+        mutexUnlock(&thread->lock);
+        logf("not done\n");
+        return -1;
     }
 
-    return -1;
+    res = thread->res;
+    thread->state = POLL_STATE_IDLE;
+    condvarWakeAll(&thread->cond);
+    mutexUnlock(&thread->lock);
+    return res;
 }
 
 void poll_thread_poll(poll_thread_t* thread, struct pollfd* fds, size_t nfds, int timeout)
 {
-    waitSingle(waiterForUEvent(&thread->done_event), UINT64_MAX);
+    logf("%s (nfds=%lu, timeout=%d)\n", __FUNCTION__, nfds, timeout);
+
+    mutexLock(&thread->lock);
+    if (thread->state != POLL_STATE_IDLE)
+    {
+        logf("not idle\n");
+        mutexUnlock(&thread->lock);
+        return;
+    }
+
+    thread->state = POLL_STATE_REQUEST;
     thread->fds = fds;
     thread->nfds = nfds;
     thread->timeout = timeout;
-    ueventSignal(&thread->wake_event);
+    thread->res = -2;
+    ueventClear(&thread->event);
+    condvarWakeAll(&thread->cond);
+    mutexUnlock(&thread->lock);
 }
 
 void poll_thread_destroy(poll_thread_t* thread)
 {
-    thread->quit = true;
-    ueventSignal(&thread->wake_event);
+    logf("%s\n", __FUNCTION__);
+    mutexLock(&thread->lock);
+
+    // wait for the thread to finish
+    while (thread->state != POLL_STATE_IDLE &&
+        thread->state != POLL_STATE_DONE)
+    {
+        condvarWait(&thread->cond, &thread->lock);
+    }
+
+    // tell the thread to quit
+    thread->state = POLL_STATE_QUIT;
+    condvarWakeAll(&thread->cond);
+    mutexUnlock(&thread->lock);
+
+    // wait for the thread to exit
     threadWaitForExit(&thread->t);
     threadClose(&thread->t);
     memset(thread, 0, sizeof(*thread));

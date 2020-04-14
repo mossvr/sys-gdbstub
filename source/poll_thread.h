@@ -10,13 +10,24 @@
 
 #include <switch.h>
 
+typedef enum
+{
+    POLL_STATE_INIT,
+    POLL_STATE_IDLE,
+    POLL_STATE_REQUEST,
+    POLL_STATE_POLLING,
+    POLL_STATE_DONE,
+    POLL_STATE_QUIT
+} poll_state_t;
+
 typedef struct
 {
     Thread t;
-    bool quit;
+    poll_state_t state;
 
-    UEvent done_event;
-    UEvent wake_event;
+    Mutex lock;
+    CondVar cond;
+    UEvent event;
 
     int res;
     struct pollfd* fds;
@@ -46,7 +57,7 @@ Waiter poll_thread_waiter(poll_thread_t* thread);
  * cause the poll operation to time out or finish early. If the waiter
  * has already been signaled, this will not block.
  */
-int poll_thread_result(poll_thread_t* thread, u64 timeout_ns);
+int poll_thread_result(poll_thread_t* thread);
 
 /**
  * Destroy the poll thread.

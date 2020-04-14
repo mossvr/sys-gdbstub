@@ -18,9 +18,8 @@
 
 int main(int argc, char* argv[])
 {
-    consoleInit(NULL);
     socketInitializeDefault();
-    nxlinkStdio();
+    int nxlink_fd = nxlinkStdio();
 
     gdb_server_t* server;
     Waiter waiters[8];
@@ -53,23 +52,27 @@ int main(int argc, char* argv[])
         
 
         logf("waiting for an event\n");
-        waitObjects(&idx, waiters, nwaiters, UINT64_MAX);
-
-        if(!gdb_server_handle_event(server, idx))
+        waitObjects(&idx, waiters, nwaiters, 100000000u);
+        if (idx >= 0)
         {
-            logf("gdb_server_handle_event returned false\n");
-            break;
+            if(!gdb_server_handle_event(server, idx))
+            {
+                logf("gdb_server_handle_event returned false\n");
+                break;
+            }
         }
 
         hidScanInput();
         if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) break;
-        consoleUpdate(NULL);
     }
 
     logf("exiting\n");
     gdb_server_destroy(server);
 
+    if (nxlink_fd >= 0)
+    {
+        close(nxlink_fd);
+    }
     socketExit();
-    consoleExit(NULL);
     return 0;
 }
