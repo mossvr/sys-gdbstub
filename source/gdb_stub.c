@@ -81,7 +81,7 @@ struct gdb_stub
 
 typedef struct
 {
-    char type;
+    const char* type;
     bool (*func)(gdb_stub_t* stub, char* packet, size_t length);
 } gdb_pkt_handler_t;
 
@@ -99,23 +99,27 @@ static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t
 static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length);
 
 static const gdb_pkt_handler_t pkt_handler[] =
 {
-        { 'q', gdb_stub_pkt_query },
-        { 'Q', gdb_stub_pkt_set },
-        { 'Z', gdb_stub_pkt_insert_breakpoint },
-        { 'z', gdb_stub_pkt_remove_breakpoint },
-        { 'g', gdb_stub_pkt_read_registers },
-        { 'G', gdb_stub_pkt_write_registers },
-        { 'p', gdb_stub_pkt_read_register },
-        { 'P', gdb_stub_pkt_write_register },
-        { 'm', gdb_stub_pkt_read_memory },
-        { 'M', gdb_stub_pkt_write_memory },
-        { 'X', gdb_stub_pkt_write_memory_bin },
-        { 'c', gdb_stub_pkt_continue },
-        { 's', gdb_stub_pkt_step },
-        { '?', gdb_stub_pkt_get_halt_reason },
+        { "q", gdb_stub_pkt_query },
+        { "Q", gdb_stub_pkt_set },
+        { "Z", gdb_stub_pkt_insert_breakpoint },
+        { "z", gdb_stub_pkt_remove_breakpoint },
+        { "g", gdb_stub_pkt_read_registers },
+        { "G", gdb_stub_pkt_write_registers },
+        { "p", gdb_stub_pkt_read_register },
+        { "P", gdb_stub_pkt_write_register },
+        { "m", gdb_stub_pkt_read_memory },
+        { "M", gdb_stub_pkt_write_memory },
+        { "X", gdb_stub_pkt_write_memory_bin },
+        { "c", gdb_stub_pkt_continue },
+        { "s", gdb_stub_pkt_step },
+        { "?", gdb_stub_pkt_get_halt_reason },
+        { "D", gdb_stub_pkt_detach },
+        { "vAttach", gdb_stub_pkt_attach },
 };
 
 typedef struct
@@ -126,12 +130,14 @@ typedef struct
 
 static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_query_attached(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length);
 
 static const gdb_query_handler_t query_handler[] =
 {
         { "Offsets", gdb_stub_query_offsets },
         { "Supported", gdb_stub_query_supported },
+        { "Attached", gdb_stub_query_attached },
         { "Xfer", gdb_stub_query_xfer },
 };
 
@@ -181,70 +187,8 @@ static void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet);
 static void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err);
 static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal);
 
-static bool get_pid_by_name(const char* name, u64* pid)
-{
-    Result res;
-    u64 our_pid;
-    u64 pids[100];
-    s32 num_pids = 0;
-
-    // get our pid
-    res = svcGetProcessId(&our_pid, CUR_PROCESS_HANDLE);
-    if (R_FAILED(res))
-    {
-        return false;
-    }
-
-    res = svcGetProcessList(&num_pids, pids, sizeof(pids));
-    if (R_FAILED(res))
-    {
-        return false;
-    }
-
-    for(s32 i = 0; i < num_pids; ++i)
-    {
-        Handle proc;
-        debug_event_t event;
-        bool found_pid = false;
-
-        // don't try to debug our own process
-        if (pids[i] == our_pid)
-        {
-            continue;
-        }
-
-        res = svcDebugActiveProcess(&proc, pids[i]);
-        if (R_FAILED(res))
-        {
-            continue;
-        }
-
-        while(R_SUCCEEDED(svcGetDebugEvent((u8*)&event, proc)))
-        {
-            if (event.type == DEBUG_EVENT_ATTACH_PROCESS &&
-                    strcmp(name, event.attach_process.process_name) == 0)
-            {
-                found_pid = true;
-                break;
-            }
-        }
-
-        svcCloseHandle(proc);
-
-        if (found_pid)
-        {
-            *pid = pids[i];
-            return true;
-        }
-    }
-
-    return false;
-}
-
 gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
 {
-    Result res;
-
     gdb_stub_t* stub = calloc(1u, sizeof(*stub));
     if(stub == NULL)
     {
@@ -254,32 +198,12 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     stub->output = output;
     stub->arg = arg;
     stub->rx.state = CMD_STATE_START;
+    stub->exception_type = UINT32_MAX;
 
     for(u32 i = 0u; i < MAX_THREADS; ++i)
     {
         stub->thread[i].tid = UINT64_MAX;
     }
-
-    u64 pid;
-    if(!get_pid_by_name("usb", &pid))
-    {
-        logf("get_pid_by_name failed\n");
-        goto err_1;
-    }
-    else
-    {
-        logf("debugging 0x%lX\n", pid);
-    }
-
-
-    res = svcDebugActiveProcess(&stub->session, pid);
-    if(R_FAILED(res))
-    {
-        logf("svcDebugActiveProcess failed (%d-%d)\n", R_MODULE(res), R_DESCRIPTION(res));
-        goto err_1;
-    }
-
-    logf("svcDebugActiveProcess succeeded\n");
 
     return stub;
 err_1:
@@ -455,6 +379,7 @@ static void gdb_stub_send_trap(gdb_stub_t* stub, const char* reason)
     gdb_stub_packet_write(stub, "T", 1u);
     gdb_stub_packet_write_hex_le(stub, &sig, sizeof(sig));
     gdb_stub_packet_write(stub, reason, strlen(reason));
+    gdb_stub_packet_write(stub, ":", 1u);
     gdb_stub_packet_end(stub);
 }
 
@@ -479,7 +404,7 @@ static void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length)
 
     for(u32 i = 0u; i < sizeof(pkt_handler) / sizeof(pkt_handler[0]); ++i)
     {
-        if(packet[0] == pkt_handler[i].type)
+        if (strncmp(packet, pkt_handler[i].type, strlen(pkt_handler[i].type)) == 0)
         {
             handled = pkt_handler[i].func(stub, packet, length);
             break;
@@ -621,15 +546,22 @@ static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t l
 
     u32 idx = stub->selected_thread;
 
+    gdb_stub_packet_begin(stub);
+
     if(idx >= MAX_THREADS ||
             stub->thread[idx].tid == UINT64_MAX)
     {
-        logf("selected thread is invalid\n");
-        return false;
+        uint8_t zero = 0u;
+        for (int i = 0; i < 788; ++i)
+        {
+            gdb_stub_packet_write_hex_le(stub, &zero, sizeof(zero));
+        }
+    }
+    else
+    {
+        gdb_stub_packet_write_hex_le(stub, &stub->thread[idx].ctx, 788u);
     }
 
-    gdb_stub_packet_begin(stub);
-    gdb_stub_packet_write_hex_le(stub, &stub->thread[idx].ctx, 788u);
     gdb_stub_packet_end(stub);
 
     return true;
@@ -666,6 +598,11 @@ static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t leng
     if(sscanf(packet, "m%lx,%lx", &addr, &size) != 2)
     {
         logf("error parsing read memory packet\n");
+        return false;
+    }
+    
+    if (stub->session != INVALID_HANDLE)
+    {
         return false;
     }
 
@@ -712,6 +649,11 @@ static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t
     u64 addr, write_len;
     size_t pos = 0u;
 
+    if (stub->session != INVALID_HANDLE)
+    {
+        return false;
+    }
+
     while(pos < length && packet[pos] != ':')
     {
         pos++;
@@ -750,12 +692,13 @@ static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_continue\n");
 
-    Result res = svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u);
-    if(R_FAILED(res))
+    if (stub->session != INVALID_HANDLE &&
+        R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
     {
         return false;
     }
 
+    stub->exception_type = UINT32_MAX;
     return true;
 }
 
@@ -763,8 +706,8 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_step\n");
 
-    Result res = svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u);
-    if(R_FAILED(res))
+    if (stub->session != INVALID_HANDLE &&
+        R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
     {
         return false;
     }
@@ -774,6 +717,16 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 
 static void gdb_stub_send_stop_reply(gdb_stub_t* stub)
 {
+    if (stub->session == INVALID_HANDLE)
+    {
+        uint8_t res = 0;
+        gdb_stub_packet_begin(stub);
+        gdb_stub_packet_write(stub, "W", 1u);
+        gdb_stub_packet_write_hex_be(stub, &res, sizeof(res));
+        gdb_stub_packet_end(stub);
+        return true;
+    }
+
     const char* reason = "";
 
     switch(stub->exception_type)
@@ -819,6 +772,66 @@ static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t 
     return true;
 }
 
+static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
+{
+    logf("%s\n", __FUNCTION__);
+    uint64_t pid;
+
+    if (packet[1] != '\0')
+    {
+        if (sscanf(packet, "D;%lx", &pid) != 1)
+        {
+            gdb_stub_send_error(stub, 0u);
+        }
+        else
+        {
+            // TODO: check the pid before detaching
+            if (stub->session != INVALID_HANDLE)
+            {
+                svcCloseHandle(stub->session);
+                stub->session = INVALID_HANDLE;
+            }
+        }
+    }
+    else
+    {
+        // the server will detach us when the socket is closed
+        gdb_stub_send_packet(stub, "OK");
+    }
+    
+    return true;
+}
+
+static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
+{
+    u64 pid;
+
+    if (sscanf(packet, "vAttach;%lx", &pid) != 1)
+    {
+        gdb_stub_send_error(stub, 0u);
+        return true;
+    }
+
+    if (stub->session != INVALID_HANDLE)
+    {
+        // only one process at a time for now
+        gdb_stub_send_error(stub, 0u);
+        return true;
+    }
+
+    logf("attaching to %d\n", pid);
+    if(R_FAILED(svcDebugActiveProcess(&stub->session, pid)))
+    {
+        logf("svcDebugActiveProcess failed\n");
+        gdb_stub_send_error(stub, 0u);
+        return true;
+    }
+
+    logf("svcDebugActiveProcess succeeded\n");
+    gdb_stub_send_stop_reply(stub);
+    return true;
+}
+
 static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length)
 {
     const char* text_str = "TextSeg=";
@@ -838,6 +851,13 @@ static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t leng
 {
     logf("gdb_stub_query_supported\n");
     gdb_stub_send_packet(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+");
+    return true;
+}
+
+static bool gdb_stub_query_attached(gdb_stub_t* stub, char* packet, size_t length)
+{
+    logf("%s\n", __FUNCTION__);
+    gdb_stub_send_packet(stub, "1");
     return true;
 }
 
@@ -1091,7 +1111,10 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
         else if(c == 0x03u)
         {
             logf("got break request\n");
-            svcBreakDebugProcess(stub->session);
+            if (stub->session != INVALID_HANDLE)
+            {
+                svcBreakDebugProcess(stub->session);
+            }
             gdb_stub_send_packet(stub, "OK");
         }
         break;
