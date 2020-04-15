@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdbool.h>
 
 #include <switch.h>
@@ -11,180 +10,11 @@
 #include "svc_dbg.h"
 #include "error.h"
 
-#define BUFFER_SIZE 512u
-#define MAX_THREADS 20u
-#define MAX_HW_BREAKPOINTS 4u
+#include "gdb_stub_priv.h"
 
-#if 1
-#define logf(fmt, ...) printf("gdb_stub: " fmt, ##__VA_ARGS__)
-#else
-#define logf(fmt, ...)
-#endif
-
-typedef enum
-{
-    CMD_STATE_START,
-    CMD_STATE_DATA,
-    CMD_STATE_ESC,
-    CMD_STATE_CHECKSUM,
-} cmd_state_t;
-
-typedef struct
-{
-    u64 tid;
-    ThreadContext ctx;
-} gdb_stub_thread_t;
-
-typedef struct
-{
-    u64 address;
-    u64 flags;
-} gdb_stub_breakpoint_t;
-
-struct gdb_stub
-{
-    Handle session;
-
-    gdb_stub_output_t output;
-    void* arg;
-    debug_event_t event;
-
-    gdb_stub_thread_t thread[MAX_THREADS];
-    u32 selected_thread;
-    u64 code_addr;
-    u32 exception_type;
-
-    gdb_stub_breakpoint_t hw_breakpoints[MAX_HW_BREAKPOINTS];
-
-    uint8_t mem[512];
-    char xfer[8192];
-    size_t xfer_pos;
-
-    struct
-    {
-        char packet[BUFFER_SIZE];
-        cmd_state_t state;
-        size_t pos;
-        char checksum_buf[2];
-        size_t checksum_pos;
-        uint8_t checksum;
-    } rx;
-
-    struct
-    {
-        cmd_state_t state;
-        uint8_t checksum;
-        char cache[BUFFER_SIZE];
-        size_t pos;
-    } tx;
-};
-
-typedef struct
-{
-    const char* type;
-    bool (*func)(gdb_stub_t* stub, char* packet, size_t length);
-} gdb_pkt_handler_t;
-
-static bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_write_memory(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length);
-
-static const gdb_pkt_handler_t pkt_handler[] =
-{
-        { "q", gdb_stub_pkt_query },
-        { "Q", gdb_stub_pkt_set },
-        { "Z", gdb_stub_pkt_insert_breakpoint },
-        { "z", gdb_stub_pkt_remove_breakpoint },
-        { "g", gdb_stub_pkt_read_registers },
-        { "G", gdb_stub_pkt_write_registers },
-        { "p", gdb_stub_pkt_read_register },
-        { "P", gdb_stub_pkt_write_register },
-        { "m", gdb_stub_pkt_read_memory },
-        { "M", gdb_stub_pkt_write_memory },
-        { "X", gdb_stub_pkt_write_memory_bin },
-        { "c", gdb_stub_pkt_continue },
-        { "s", gdb_stub_pkt_step },
-        { "?", gdb_stub_pkt_get_halt_reason },
-        { "D", gdb_stub_pkt_detach },
-        { "vAttach", gdb_stub_pkt_attach },
-};
-
-typedef struct
-{
-    const char* query;
-    bool (*func)(gdb_stub_t* stub, char* packet, size_t length);
-} gdb_query_handler_t;
-
-static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_query_attached(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length);
-
-static const gdb_query_handler_t query_handler[] =
-{
-        { "Offsets", gdb_stub_query_offsets },
-        { "Supported", gdb_stub_query_supported },
-        { "Attached", gdb_stub_query_attached },
-        { "Xfer", gdb_stub_query_xfer },
-};
-
-typedef struct
-{
-    const char* object;
-    const char* op;
-    const char* annex;
-    size_t offset;
-    size_t length;
-} gdb_xfer_req_t;
-
-typedef struct
-{
-    const char* object;
-    bool (*func)(gdb_stub_t* stub, gdb_xfer_req_t* req);
-} gdb_xfer_handler_t;
-
-static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req);
-
-static const gdb_xfer_handler_t xfer_handler[] =
-{
-    { "osdata", gdb_stub_xfer_osdata },
-};
 
 static const char hex_chars[] = "0123456789abcdef";
 
-static const char* proc_list_header =
-        "<osdata type=\"processes\">\n";
-
-static const char* proc_list_fmt =
-        "<item>\n"
-        "<column name=\"pid\">%u</column>\n"
-        "<column name=\"command\">%s</column>\n"
-        "</item>\n";
-
-static const char* proc_list_footer = "</osdata>";
-
-static const char* thread_list_header =
-        "<?xml version=\"1.0\"?>\n"
-        "<threads>\n";
-
-static const char* thread_list_footer = "</threads>";
-static const char* thread_list_fmt = "<thread id=\"%s\" name=\"%s\" />";
-
-static void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet);
-static void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err);
 static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal);
 
 gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
@@ -192,7 +22,7 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     gdb_stub_t* stub = calloc(1u, sizeof(*stub));
     if(stub == NULL)
     {
-        goto err;
+        return NULL;
     }
 
     stub->output = output;
@@ -206,10 +36,6 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     }
 
     return stub;
-err_1:
-    free(stub);
-err:
-    return NULL;
 }
 
 static uint8_t gdb_stub_decode_hex_char(char c)
@@ -224,7 +50,7 @@ static uint8_t gdb_stub_decode_hex_char(char c)
     return UINT8_MAX;
 }
 
-static int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_t output_len)
+int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_t output_len)
 {
     int dec_len = 0;
 
@@ -249,12 +75,12 @@ static int gdb_stub_decode_hex(const char* input, size_t input_len, void* output
     return dec_len;
 }
 
-static void gdb_stub_putc(gdb_stub_t* stub, char c)
+void gdb_stub_putc(gdb_stub_t* stub, char c)
 {
     stub->output(stub, &c, 1u, stub->arg);
 }
 
-static void gdb_stub_packet_begin(gdb_stub_t* stub)
+void gdb_stub_packet_begin(gdb_stub_t* stub)
 {
     stub->tx.state = CMD_STATE_DATA;
     stub->tx.checksum = 0u;
@@ -263,7 +89,7 @@ static void gdb_stub_packet_begin(gdb_stub_t* stub)
     stub->tx.cache[stub->tx.pos++] = '$';
 }
 
-static bool gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
+bool gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
 {
     if(stub->tx.state != CMD_STATE_DATA)
     {
@@ -298,7 +124,7 @@ static bool gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len
     return true;
 }
 
-static bool gdb_stub_packet_write_hex_le(gdb_stub_t* stub, const void* data, size_t data_len)
+bool gdb_stub_packet_write_hex_le(gdb_stub_t* stub, const void* data, size_t data_len)
 {
     for(uint32_t i = 0u; i != data_len; ++i)
     {
@@ -309,7 +135,7 @@ static bool gdb_stub_packet_write_hex_le(gdb_stub_t* stub, const void* data, siz
     return true;
 }
 
-static bool gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, size_t data_len)
+bool gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, size_t data_len)
 {
     for(uint32_t i = data_len; i != 0u; --i)
     {
@@ -320,7 +146,7 @@ static bool gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, siz
     return true;
 }
 
-static bool gdb_stub_packet_end(gdb_stub_t* stub)
+bool gdb_stub_packet_end(gdb_stub_t* stub)
 {
     if(stub->tx.state != CMD_STATE_DATA)
     {
@@ -346,14 +172,14 @@ static bool gdb_stub_packet_end(gdb_stub_t* stub)
     return true;
 }
 
-static void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet)
+void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet)
 {
     gdb_stub_packet_begin(stub);
     gdb_stub_packet_write(stub, packet, strlen(packet));
     gdb_stub_packet_end(stub);
 }
 
-static void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err)
+void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err)
 {
     logf("<<<<<<<<<<<<<<<<<< gdb_stub_send_error (err=0x%X)\n", err);
     gdb_stub_packet_begin(stub);
@@ -381,720 +207,6 @@ static void gdb_stub_send_trap(gdb_stub_t* stub, const char* reason)
     gdb_stub_packet_write(stub, reason, strlen(reason));
     gdb_stub_packet_write(stub, ":", 1u);
     gdb_stub_packet_end(stub);
-}
-
-static inline u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid)
-{
-    for(u32 i = 0u; i < MAX_THREADS; ++i)
-    {
-        if(stub->thread[i].tid == tid)
-        {
-            return i;
-        }
-    }
-
-    return UINT32_MAX;
-}
-
-static void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length)
-{
-    bool handled = false;
-
-    logf("got packet (%s)\n", packet);
-
-    for(u32 i = 0u; i < sizeof(pkt_handler) / sizeof(pkt_handler[0]); ++i)
-    {
-        if (strncmp(packet, pkt_handler[i].type, strlen(pkt_handler[i].type)) == 0)
-        {
-            handled = pkt_handler[i].func(stub, packet, length);
-            break;
-        }
-    }
-
-    if(!handled)
-    {
-        gdb_stub_send_packet(stub, "");
-    }
-}
-
-static bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_query\n");
-
-    for (size_t i = 0u; i < sizeof(query_handler) / sizeof(query_handler[0]); ++i)
-    {
-        if (strncmp(&packet[1], query_handler[i].query, strlen(query_handler[i].query)) == 0)
-        {
-            return query_handler[i].func(stub, packet, length);
-        }
-    }
-
-    return false;
-}
-
-static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("%s\n", __FUNCTION__);
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
-
-static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_insert_breakpoint\n");
-    u64 addr;
-
-    switch(packet[1])
-    {
-    case '1':
-        if(sscanf(packet, "Z1,%lX", &addr) == 1)
-        {
-            bool bp_set = false;
-            logf("setting hw breakpoint at address 0x%lX\n", addr);
-            for(u32 i = 0u; i < MAX_HW_BREAKPOINTS; ++i)
-            {
-                if((stub->hw_breakpoints[i].flags & 1u) == 0u)
-                {
-                    stub->hw_breakpoints[i].flags = (0xFu << 5u) | 1u;
-                    stub->hw_breakpoints[i].address = addr;
-
-                    Result res = svcSetHardwareBreakPoint(i,
-                            stub->hw_breakpoints[i].flags,
-                            stub->hw_breakpoints[i].address);
-
-                    if(R_SUCCEEDED(res))
-                    {
-                        bp_set = true;
-                    }
-                    else
-                    {
-                        stub->hw_breakpoints[i].flags = 0u;
-                        stub->hw_breakpoints[i].address = 0u;
-
-                        logf("svcSetHardwareBreakPoint failed (err=%d-%d, id=%u, flags=0x%lX, addr=0x%lX)\n",
-                                R_MODULE(res), R_DESCRIPTION(res),
-                                i,
-                                stub->hw_breakpoints[i].flags,
-                                stub->hw_breakpoints[i].address);
-                    }
-                    break;
-                }
-            }
-
-            if(bp_set)
-            {
-                gdb_stub_send_packet(stub, "OK");
-            }
-            else
-            {
-                gdb_stub_send_error(stub, 0u);
-            }
-
-            return true;
-        }
-        break;
-    }
-
-    return false;
-}
-
-static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_remove_breakpoint\n");
-    u64 addr;
-
-    switch(packet[1])
-    {
-    case '1':
-        if(sscanf(packet, "z1,%lX", &addr) == 1)
-        {
-            for(u32 i = 0u; i < MAX_HW_BREAKPOINTS; ++i)
-            {
-                if(stub->hw_breakpoints[i].address == addr)
-                {
-                    stub->hw_breakpoints[i].flags = 0u;
-                    stub->hw_breakpoints[i].address = 0u;
-
-                    Result res = svcSetHardwareBreakPoint(i,
-                            stub->hw_breakpoints[i].flags,
-                            stub->hw_breakpoints[i].address);
-
-                    if(R_FAILED(res))
-                    {
-                        logf("svcSetHardwareBreakPoint failed (err=%d-%d, id=%u, flags=0x%lX, addr=0x%lX)\n",
-                                R_MODULE(res), R_DESCRIPTION(res),
-                                i,
-                                stub->hw_breakpoints[i].flags,
-                                stub->hw_breakpoints[i].address);
-                    }
-                    break;
-                }
-            }
-
-            gdb_stub_send_packet(stub, "OK");
-            return true;
-        }
-        break;
-    }
-
-    return false;
-}
-
-static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_read_registers\n");
-
-    u32 idx = stub->selected_thread;
-
-    gdb_stub_packet_begin(stub);
-
-    if(idx >= MAX_THREADS ||
-            stub->thread[idx].tid == UINT64_MAX)
-    {
-        uint8_t zero = 0u;
-        for (int i = 0; i < 788; ++i)
-        {
-            gdb_stub_packet_write_hex_le(stub, &zero, sizeof(zero));
-        }
-    }
-    else
-    {
-        gdb_stub_packet_write_hex_le(stub, &stub->thread[idx].ctx, 788u);
-    }
-
-    gdb_stub_packet_end(stub);
-
-    return true;
-}
-
-static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_write_registers\n");
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
-
-static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_read_register\n");
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
-
-static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_write_register\n");
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
-
-static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_read_memory\n");
-
-    Result res;
-    u64 addr, size;
-
-    if(sscanf(packet, "m%lx,%lx", &addr, &size) != 2)
-    {
-        logf("error parsing read memory packet\n");
-        return false;
-    }
-    
-    if (stub->session == INVALID_HANDLE)
-    {
-        return false;
-    }
-
-    gdb_stub_packet_begin(stub);
-
-    while(size != 0u)
-    {
-        size_t chunk = size;
-        if(chunk > sizeof(stub->mem))
-        {
-            chunk = sizeof(stub->mem);
-        }
-
-        res = svcReadDebugProcessMemory(stub->mem, stub->session, addr, chunk);
-        if(R_SUCCEEDED(res))
-        {
-            gdb_stub_packet_write_hex_le(stub, stub->mem, chunk);
-        }
-        else
-        {
-            logf("svcReadDebugProcessMemory failed (err=0x%X, addr=0x%lX, size=0x%lX)\n", res, addr, size);
-            break;
-        }
-
-        size -= chunk;
-        addr += chunk;
-    }
-
-    gdb_stub_packet_end(stub);
-
-    return true;
-}
-
-static bool gdb_stub_pkt_write_memory(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_write_memory\n");
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
-
-static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_write_memory_bin\n");
-    u64 addr, write_len;
-    size_t pos = 0u;
-
-    if (stub->session == INVALID_HANDLE)
-    {
-        return false;
-    }
-
-    while(pos < length && packet[pos] != ':')
-    {
-        pos++;
-    }
-
-    if(pos == length)
-    {
-        return false;
-    }
-
-    packet[pos] = '\0';
-
-    if(sscanf(packet, "X%lX,%lX", &addr, &write_len) != 2)
-    {
-        return false;
-    }
-
-    if(write_len != length - pos - 1u)
-    {
-        logf("length doesn't match packet\n");
-        return false;
-    }
-
-    if(write_len != 0u &&
-            R_FAILED(svcWriteDebugProcessMemory(stub->session, &packet[pos+1u], addr, write_len)))
-    {
-        logf("svcWriteDebugProcessMemory failed (addr=0x%lX, len=0x%lX)\n", addr, write_len);
-        return false;
-    }
-
-    gdb_stub_send_packet(stub, "OK");
-    return true;
-}
-
-static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_continue\n");
-
-    if (stub->session == INVALID_HANDLE ||
-        R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
-    {
-        return false;
-    }
-
-    stub->exception_type = UINT32_MAX;
-    return true;
-}
-
-static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_step\n");
-
-    if (stub->session == INVALID_HANDLE ||
-        R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-static void gdb_stub_send_stop_reply(gdb_stub_t* stub)
-{
-    if (stub->session == INVALID_HANDLE)
-    {
-        uint8_t res = 0;
-        gdb_stub_packet_begin(stub);
-        gdb_stub_packet_write(stub, "W", 1u);
-        gdb_stub_packet_write_hex_be(stub, &res, sizeof(res));
-        gdb_stub_packet_end(stub);
-        return;
-    }
-
-    const char* reason = "";
-
-    switch(stub->exception_type)
-    {
-    case DEBUG_EXCEPTION_TRAP:
-        reason = "swbreak";
-        break;
-    case DEBUG_EXCEPTION_INSTRUCTION_ABORT:
-        break;
-    case DEBUG_EXCEPTION_DATA_ABORT_MISC:
-        break;
-    case DEBUG_EXCEPTION_PC_SP_ALIGNMENT_FAULT:
-        break;
-    case DEBUG_EXCEPTION_DEBUGGER_ATTACHED:
-        break;
-    case DEBUG_EXCEPTION_BREAKPOINT:
-        reason = "hwbreak";
-        break;
-    case DEBUG_EXCEPTION_USER_BREAK:
-        break;
-    case DEBUG_EXCEPTION_DEBUGGER_BREAK:
-        break;
-    case DEBUG_EXCEPTION_BAD_SVC_ID:
-        break;
-    case DEBUG_EXCEPTION_SERROR:
-        break;
-    }
-
-    if(*reason == '\0')
-    {
-        gdb_stub_send_signal(stub, 0u);
-    }
-    else
-    {
-        gdb_stub_send_trap(stub, reason);
-    }
-}
-
-static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_pkt_get_halt_reason\n");
-    gdb_stub_send_stop_reply(stub);
-    return true;
-}
-
-static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("%s\n", __FUNCTION__);
-    uint64_t pid;
-
-    if (packet[1] != '\0')
-    {
-        if (sscanf(packet, "D;%lx", &pid) != 1)
-        {
-            gdb_stub_send_error(stub, 0u);
-        }
-        else
-        {
-            // TODO: check the pid before detaching
-            if (stub->session != INVALID_HANDLE)
-            {
-                svcCloseHandle(stub->session);
-                stub->session = INVALID_HANDLE;
-            }
-        }
-    }
-    else
-    {
-        // the server will detach us when the socket is closed
-        gdb_stub_send_packet(stub, "OK");
-    }
-    
-    return true;
-}
-
-static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
-{
-    u64 pid;
-
-    if (sscanf(packet, "vAttach;%lx", &pid) != 1)
-    {
-        gdb_stub_send_error(stub, 0u);
-        return true;
-    }
-
-    if (stub->session != INVALID_HANDLE)
-    {
-        // only one process at a time for now
-        gdb_stub_send_error(stub, 0u);
-        return true;
-    }
-
-    logf("attaching to %d\n", pid);
-    if(R_FAILED(svcDebugActiveProcess(&stub->session, pid)))
-    {
-        logf("svcDebugActiveProcess failed\n");
-        gdb_stub_send_error(stub, 0u);
-        return true;
-    }
-
-    logf("svcDebugActiveProcess succeeded\n");
-    gdb_stub_send_stop_reply(stub);
-    return true;
-}
-
-static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length)
-{
-    const char* text_str = "TextSeg=";
-    u64 addr = stub->code_addr;
-
-    logf("gdb_stub_query_offsets (TextSeg=0x%lX)\n", addr);
-
-    gdb_stub_packet_begin(stub);
-    gdb_stub_packet_write(stub, text_str, strlen(text_str));
-    gdb_stub_packet_write_hex_be(stub, &addr, sizeof(addr));
-    gdb_stub_packet_end(stub);
-
-    return true;
-}
-
-static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("gdb_stub_query_supported\n");
-    gdb_stub_send_packet(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+");
-    return true;
-}
-
-static bool gdb_stub_query_attached(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("%s\n", __FUNCTION__);
-    gdb_stub_send_packet(stub, "1");
-    return true;
-}
-
-static bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("%s\n", __FUNCTION__);
-    size_t index = 0;
-    gdb_xfer_req_t req;
-    req.object = "";
-    req.op = "";
-    req.annex = "";
-    req.offset = 0u;
-    req.length = 0u;
-
-    char* token = packet;
-    char* pos = packet;
-
-    while (token != NULL)
-    {
-        while (*pos != '\0' && *pos != ':')
-        {
-            pos++;
-        }
-
-        bool last = *pos == '\0';
-        if (!last)
-        {
-            *pos = '\0';
-            pos++;
-        }
-
-        switch(index)
-        {
-        case 1:
-            req.object = token;
-            break;
-        case 2:
-            req.op = token;
-
-            if (strcmp(req.op, "read") != 0)
-            {
-                logf("qXfer: unsupported op: %s\n", req.op);
-                return false;
-            }
-            break;
-        case 3:
-            req.annex = token;
-            break;
-        case 4:
-        {
-            char* end = token;
-            // should be offset,length
-            req.offset = strtoul(end, &end, 16);
-            if (*end == ',')
-            {
-                end++;
-                req.length = strtoul(end, &end, 16);
-            }
-            break;
-        }
-        }
-
-        index++;
-        token = last ? NULL : pos;
-    }
-
-    logf("xfer (object=%s, op=%s, annex=%s, offset=%lu, length=%lu)\n", req.object, req.op, req.annex, req.offset, req.length);
-
-    for(size_t i = 0u; i < sizeof(xfer_handler) / sizeof(xfer_handler[0]); ++i)
-    {
-        if (strncmp(req.object, xfer_handler[i].object, strlen(xfer_handler[i].object)) == 0)
-        {
-            return xfer_handler[i].func(stub, &req);
-        }
-    }
-
-    return false;
-}
-
-static bool xfer_printf(gdb_stub_t* stub, const char* fmt, ...)
-{
-    int remaining = sizeof(stub->xfer) - stub->xfer_pos;
-
-    if (remaining > 0)
-    {
-        va_list arglist;
-        va_start(arglist, fmt);
-        stub->xfer_pos += vsnprintf(&stub->xfer[stub->xfer_pos], remaining, fmt, arglist);
-        va_end(arglist);
-
-        if (stub->xfer_pos >= sizeof(stub->xfer))
-        {
-            stub->xfer_pos = sizeof(stub->xfer) - 1u;
-            logf("%s truncated (len=%lu)\n", stub->xfer_pos);
-            return false;
-        }
-
-        return true;
-    }
-    
-    logf("%s truncated (len=%lu)\n", stub->xfer_pos);
-    return false;
-}
-
-static bool xfer_snap_processes(gdb_stub_t* stub)
-{
-    Result res;
-    u64 our_pid;
-    u64 pids[100];
-    s32 num_pids = 0;
-
-    stub->xfer[0] = '\0';
-    stub->xfer_pos = 0u;
-
-    if (!xfer_printf(stub, "%s", proc_list_header))
-    {
-        goto err;
-    }
-
-    // get our pid
-    res = svcGetProcessId(&our_pid, CUR_PROCESS_HANDLE);
-    if (R_FAILED(res))
-    {
-        goto err;
-    }
-
-    // get the process list
-    res = svcGetProcessList(&num_pids, pids, sizeof(pids) / sizeof(pids[0]));
-    if (R_FAILED(res))
-    {
-        goto err;
-    }
-
-    logf("printing %d processes\n", num_pids);
-    for(s32 i = 0; i < num_pids; ++i)
-    {
-        Handle proc;
-        debug_event_t event;
-
-        // don't try to debug our process
-        if (pids[i] == our_pid)
-        {
-            continue;
-        }
-
-        logf("\t\tdebugging pid %lu\n", pids[i]);
-        res = svcDebugActiveProcess(&proc, pids[i]);
-        if (R_FAILED(res))
-        {
-            logf("failed\n");
-            continue;
-        }
-
-        bool ok = true;
-
-        while(R_SUCCEEDED(svcGetDebugEvent((u8*)&event, proc)))
-        {
-            if (event.type == DEBUG_EVENT_ATTACH_PROCESS)
-            {
-                if (!xfer_printf(stub, proc_list_fmt,
-                    event.attach_process.process_id, event.attach_process.process_name))
-                {
-                    ok = false;
-                    
-                }
-                break;
-            }
-        }
-
-        svcCloseHandle(proc);
-        if (!ok)
-        {
-            logf("failed to print process (pid=%u)\n", pids[i]);
-            goto err;
-        }
-    }
-    
-    if (!xfer_printf(stub, "%s", proc_list_footer))
-    {
-        goto err;
-    }
-
-    return true;
-
-err:
-    stub->xfer[0] = '\0';
-    stub->xfer_pos = 0u;
-    return false;
-}
-
-static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req)
-{
-    logf("%s\n", __FUNCTION__);
-
-    // TODO: check if the annex is different than the snapshot
-    if (req->offset == 0u)
-    {
-        if (*req->annex == '\0' ||
-            strcmp(req->annex, "processes") == 0)
-        {
-            if (!xfer_snap_processes(stub))
-            {
-                gdb_stub_send_error(stub, 0u);
-                return true;
-            }
-        }
-        else
-        {
-            return false;
-        }
-    }
-
-    if (stub->xfer_pos != 0u)
-    {
-        logf("xfer_pos=%lu\n", stub->xfer_pos);
-        bool more = true;
-        size_t start = req->offset;
-        size_t end = req->offset + req->length;
-
-        if (end >= stub->xfer_pos)
-        {
-            end = stub->xfer_pos;
-            more = false;
-        }
-
-        logf("start=%lu, end=%lu, more=%d\n", start, end, more ? 1u : 0u);
-        gdb_stub_packet_begin(stub);
-        gdb_stub_packet_write(stub, more ? "m" : "l", 1u);
-        if (start < end)
-        {
-            gdb_stub_packet_write(stub, &stub->xfer[start], end - start);
-        }
-        gdb_stub_packet_end(stub);
-        return true;
-    }
-
-    return false;
 }
 
 static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
@@ -1292,6 +404,56 @@ static void print_debug_event(debug_event_t* event)
     }
 }
 
+void gdb_stub_send_stop_reply(gdb_stub_t* stub)
+{
+    if (stub->session == INVALID_HANDLE)
+    {
+        uint8_t res = 0;
+        gdb_stub_packet_begin(stub);
+        gdb_stub_packet_write(stub, "W", 1u);
+        gdb_stub_packet_write_hex_be(stub, &res, sizeof(res));
+        gdb_stub_packet_end(stub);
+        return;
+    }
+
+    const char* reason = "";
+
+    switch(stub->exception_type)
+    {
+    case DEBUG_EXCEPTION_TRAP:
+        reason = "swbreak";
+        break;
+    case DEBUG_EXCEPTION_INSTRUCTION_ABORT:
+        break;
+    case DEBUG_EXCEPTION_DATA_ABORT_MISC:
+        break;
+    case DEBUG_EXCEPTION_PC_SP_ALIGNMENT_FAULT:
+        break;
+    case DEBUG_EXCEPTION_DEBUGGER_ATTACHED:
+        break;
+    case DEBUG_EXCEPTION_BREAKPOINT:
+        reason = "hwbreak";
+        break;
+    case DEBUG_EXCEPTION_USER_BREAK:
+        break;
+    case DEBUG_EXCEPTION_DEBUGGER_BREAK:
+        break;
+    case DEBUG_EXCEPTION_BAD_SVC_ID:
+        break;
+    case DEBUG_EXCEPTION_SERROR:
+        break;
+    }
+
+    if(*reason == '\0')
+    {
+        gdb_stub_send_signal(stub, 0u);
+    }
+    else
+    {
+        gdb_stub_send_trap(stub, reason);
+    }
+} 
+
 static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* exception)
 {
     stub->exception_type = exception->type;
@@ -1305,6 +467,19 @@ static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* except
     }
 
     gdb_stub_send_stop_reply(stub);
+}
+
+static inline u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid)
+{
+    for(u32 i = 0u; i < MAX_THREADS; ++i)
+    {
+        if(stub->thread[i].tid == tid)
+        {
+            return i;
+        }
+    }
+
+    return UINT32_MAX;
 }
 
 static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
