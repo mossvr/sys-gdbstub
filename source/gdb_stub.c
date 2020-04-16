@@ -75,6 +75,29 @@ int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_
     return dec_len;
 }
 
+bool gdb_stub_parse_thread_id(const char* input, s64* o_pid, s64* o_tid)
+{
+    char* end;
+    
+    if (*input == 'p')
+    {
+        input++;
+        *o_pid = strtol(input, &end, 16);
+        if (end == input || *end != '.')
+        {
+            return false;
+        }
+        input = end+1;
+    }
+    else
+    {
+        *o_pid = 0;
+    }
+
+    *o_tid = strtol(input, &end, 16);
+    return end != input;
+}
+
 void gdb_stub_putc(gdb_stub_t* stub, char c)
 {
     stub->output(stub, &c, 1u, stub->arg);
@@ -469,7 +492,7 @@ static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* except
     gdb_stub_send_stop_reply(stub);
 }
 
-static inline u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid)
+u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid)
 {
     for(u32 i = 0u; i < MAX_THREADS; ++i)
     {

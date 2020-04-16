@@ -15,6 +15,8 @@ typedef struct
 } gdb_pkt_handler_t;
 
 static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_set_thread(gdb_stub_t* stub, char* packet, size_t length);
+static bool gdb_stub_pkt_thread_alive(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length);
@@ -34,6 +36,8 @@ static const gdb_pkt_handler_t pkt_handler[] =
 {
         { "q", gdb_stub_pkt_query },
         { "Q", gdb_stub_pkt_set },
+        { "H", gdb_stub_pkt_set_thread },
+        { "T", gdb_stub_pkt_thread_alive },
         { "Z", gdb_stub_pkt_insert_breakpoint },
         { "z", gdb_stub_pkt_remove_breakpoint },
         { "g", gdb_stub_pkt_read_registers },
@@ -76,6 +80,69 @@ static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length)
     logf("%s\n", __FUNCTION__);
     logf("%s not implemented\n", __FUNCTION__);
     return false;
+}
+
+static bool gdb_stub_pkt_set_thread(gdb_stub_t* stub, char* packet, size_t length)
+{
+    logf("%s\n", __FUNCTION__);
+    s64 pid, tid;
+    char* op = &packet[1];
+
+    if (*op != 'g')
+    {
+        goto err;
+    }
+
+    if (!gdb_stub_parse_thread_id(packet+2, &pid, &tid))
+    {
+        goto err;
+    }
+
+    if ((pid <= 0 && pid != stub->pid) || tid <= 0)
+    {
+        goto err;
+    }
+
+    for (u32 i = 0u; i < MAX_THREADS; ++i)
+    {
+        if (stub->thread[i].tid != UINT64_MAX &&
+            stub->thread[i].tid == (u64)tid)
+        {
+            stub->selected_thread = i;
+            gdb_stub_send_packet(stub, "OK");
+            return true;
+        }
+    }
+
+err:
+    gdb_stub_send_error(stub, 0u);
+    return true;
+}
+
+static bool gdb_stub_pkt_thread_alive(gdb_stub_t* stub, char* packet, size_t length)
+{
+    logf("%s\n", __FUNCTION__);
+    s64 pid, tid;
+
+    if (!gdb_stub_parse_thread_id(packet+1, &pid, &tid))
+    {
+        goto err;
+    }
+
+    if ((pid <= 0 && pid != stub->pid) || tid <= 0)
+    {
+        goto err;
+    }
+
+    u32 idx = gdb_stub_thread_id_to_index(stub, tid);
+    if (idx < MAX_THREADS)
+    {
+        gdb_stub_send_packet(stub, "OK");
+    }
+
+err:
+    gdb_stub_send_error(stub, 0u);
+    return true;
 }
 
 static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)

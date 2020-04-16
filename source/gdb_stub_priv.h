@@ -82,6 +82,8 @@ struct gdb_stub
 };
 
 int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_t output_len);
+bool gdb_stub_parse_thread_id(const char* input, s64* o_pid, s64* o_tid);
+u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid);
 
 void gdb_stub_putc(gdb_stub_t* stub, char c);
 void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet);
