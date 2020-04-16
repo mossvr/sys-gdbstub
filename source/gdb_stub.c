@@ -601,7 +601,7 @@ static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t leng
         return false;
     }
     
-    if (stub->session != INVALID_HANDLE)
+    if (stub->session == INVALID_HANDLE)
     {
         return false;
     }
@@ -649,7 +649,7 @@ static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t
     u64 addr, write_len;
     size_t pos = 0u;
 
-    if (stub->session != INVALID_HANDLE)
+    if (stub->session == INVALID_HANDLE)
     {
         return false;
     }
@@ -692,7 +692,7 @@ static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_continue\n");
 
-    if (stub->session != INVALID_HANDLE &&
+    if (stub->session == INVALID_HANDLE ||
         R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
     {
         return false;
@@ -706,7 +706,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_step\n");
 
-    if (stub->session != INVALID_HANDLE &&
+    if (stub->session == INVALID_HANDLE ||
         R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
     {
         return false;
@@ -724,7 +724,7 @@ static void gdb_stub_send_stop_reply(gdb_stub_t* stub)
         gdb_stub_packet_write(stub, "W", 1u);
         gdb_stub_packet_write_hex_be(stub, &res, sizeof(res));
         gdb_stub_packet_end(stub);
-        return true;
+        return;
     }
 
     const char* reason = "";
