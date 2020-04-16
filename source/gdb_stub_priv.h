@@ -45,6 +45,7 @@ typedef struct
 struct gdb_stub
 {
     Handle session;
+    u64 pid;
 
     gdb_stub_output_t output;
     void* arg;
@@ -59,7 +60,7 @@ struct gdb_stub
 
     uint8_t mem[512];
     char xfer[8192];
-    size_t xfer_pos;
+    size_t xfer_len;
 
     struct
     {

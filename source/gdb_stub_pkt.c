@@ -368,22 +368,25 @@ static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
 
     if (packet[1] != '\0')
     {
-        if (sscanf(packet, "D;%lx", &pid) != 1)
+        if (sscanf(packet, "D;%lx", &pid) == 1 &&
+            pid == stub->pid &&
+            stub->session != INVALID_HANDLE)
         {
-            gdb_stub_send_error(stub, 0u);
+            svcCloseHandle(stub->session);
+            stub->session = INVALID_HANDLE;
+            stub->pid = UINT64_MAX;
+            gdb_stub_send_packet(stub, "OK");
         }
         else
         {
-            // TODO: check the pid before detaching
-            if (stub->session != INVALID_HANDLE)
-            {
-                svcCloseHandle(stub->session);
-                stub->session = INVALID_HANDLE;
-            }
+            gdb_stub_send_error(stub, 0u);
         }
     }
+    else
+    {
+        gdb_stub_send_packet(stub, "OK");
+    }
     
-    gdb_stub_send_packet(stub, "OK");
     return true;
 }
 
@@ -408,9 +411,13 @@ static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
     if(R_FAILED(svcDebugActiveProcess(&stub->session, pid)))
     {
         logf("svcDebugActiveProcess failed\n");
+        stub->session = INVALID_HANDLE;
+        stub->pid = UINT64_MAX;
         gdb_stub_send_error(stub, 0u);
         return true;
     }
+
+    stub->pid = pid;
 
     logf("svcDebugActiveProcess succeeded\n");
     gdb_stub_send_stop_reply(stub);

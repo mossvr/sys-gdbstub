@@ -486,8 +486,8 @@ static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
 {
     u32 thread_idx = gdb_stub_thread_id_to_index(stub, thread_id);
 
-    // find a free slot for the new thread
-    if(thread_idx == UINT32_MAX)
+    // if it's a new thread, find a slot for it
+    if (thread_idx == UINT32_MAX)
     {
         for(u32 i = 0u; i < MAX_THREADS; ++i)
         {
@@ -497,25 +497,25 @@ static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
                 break;
             }
         }
+
+        // check if we've exceeded max threads
+        if (thread_idx == UINT32_MAX)
+        {
+            logf("exceeded max threads\n");
+            return;
+        }
+
+        stub->thread[thread_idx].tid = thread_id;
+        logf("thread %lu attached\n", thread_id);
     }
 
-    // check if we've exceeded max threads
-    if(thread_idx == UINT32_MAX)
-    {
-        logf("exceeded max threads\n");
-        return;
-    }
-
-    // store the thread and read the context
-    stub->thread[thread_idx].tid = thread_id;
     svcGetDebugThreadContext(&stub->thread[thread_idx].ctx, stub->session, thread_id, 0xFu);
-    logf("thread %lu attached\n", thread_id);
 }
 
 static void gdb_stub_exit_thread(gdb_stub_t* stub, u64 thread_id)
 {
     u32 idx = gdb_stub_thread_id_to_index(stub, thread_id);
-    if(idx < MAX_THREADS)
+    if (idx < MAX_THREADS)
     {
         logf("thread %lu detached\n", thread_id);
         memset(&stub->thread[idx], 0, sizeof(stub->thread[idx]));
@@ -528,25 +528,25 @@ static void gdb_stub_event(gdb_stub_t* stub, const debug_event_t* event)
     print_debug_event(&stub->event);
 
     switch(event->type)
+    {
+    case DEBUG_EVENT_ATTACH_PROCESS:
+        break;
+    case DEBUG_EVENT_ATTACH_THREAD:
+        if(stub->code_addr == 0u)
         {
-        case DEBUG_EVENT_ATTACH_PROCESS:
-            break;
-        case DEBUG_EVENT_ATTACH_THREAD:
-            if(stub->code_addr == 0u)
-            {
-                stub->code_addr = event->attach_thread.entry_point;
-            }
-            gdb_stub_attach_thread(stub, event->thread_id);
-            break;
-        case DEBUG_EVENT_EXIT_PROCESS:
-            break;
-        case DEBUG_EVENT_EXIT_THREAD:
-            gdb_stub_exit_thread(stub, event->thread_id);
-            break;
-        case DEBUG_EVENT_EXCEPTION:
-            gdb_stub_exception(stub, &event->exception);
-            break;
+            stub->code_addr = event->attach_thread.entry_point;
         }
+        gdb_stub_attach_thread(stub, event->thread_id);
+        break;
+    case DEBUG_EVENT_EXIT_PROCESS:
+        break;
+    case DEBUG_EVENT_EXIT_THREAD:
+        gdb_stub_exit_thread(stub, event->thread_id);
+        break;
+    case DEBUG_EVENT_EXCEPTION:
+        gdb_stub_exception(stub, &event->exception);
+        break;
+    }
 }
 
 void gdb_stub_handle_events(gdb_stub_t* stub)

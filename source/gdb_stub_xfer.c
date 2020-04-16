@@ -23,29 +23,13 @@ typedef struct
 } gdb_xfer_handler_t;
 
 static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req);
+static bool gdb_stub_xfer_threads(gdb_stub_t* stub, gdb_xfer_req_t* req);
 
 static const gdb_xfer_handler_t xfer_handler[] =
 {
     { "osdata", gdb_stub_xfer_osdata },
+    { "threads", gdb_stub_xfer_threads },
 };
-
-static const char* proc_list_header =
-        "<osdata type=\"processes\">\n";
-
-static const char* proc_list_fmt =
-        "<item>\n"
-        "<column name=\"pid\">%u</column>\n"
-        "<column name=\"command\">%s</column>\n"
-        "</item>\n";
-
-static const char* proc_list_footer = "</osdata>";
-
-static const char* thread_list_header =
-        "<?xml version=\"1.0\"?>\n"
-        "<threads>\n";
-
-static const char* thread_list_footer = "</threads>";
-static const char* thread_list_fmt = "<thread id=\"%s\" name=\"%s\" />";
 
 bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length)
 {
@@ -125,38 +109,49 @@ bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length)
 
 static bool xfer_printf(gdb_stub_t* stub, const char* fmt, ...)
 {
-    int remaining = sizeof(stub->xfer) - stub->xfer_pos;
+    int remaining = sizeof(stub->xfer) - stub->xfer_len;
 
     if (remaining > 0)
     {
         va_list arglist;
         va_start(arglist, fmt);
-        stub->xfer_pos += vsnprintf(&stub->xfer[stub->xfer_pos], remaining, fmt, arglist);
+        stub->xfer_len += vsnprintf(&stub->xfer[stub->xfer_len], remaining, fmt, arglist);
         va_end(arglist);
 
-        if (stub->xfer_pos >= sizeof(stub->xfer))
+        if (stub->xfer_len >= sizeof(stub->xfer))
         {
-            stub->xfer_pos = sizeof(stub->xfer) - 1u;
-            logf("xfer truncated (len=%lu)\n", stub->xfer_pos);
+            stub->xfer_len = sizeof(stub->xfer) - 1u;
+            logf("xfer truncated (len=%lu)\n", stub->xfer_len);
             return false;
         }
 
         return true;
     }
     
-    logf("xfer truncated (len=%lu)\n", stub->xfer_pos);
+    logf("xfer truncated (len=%lu)\n", stub->xfer_len);
     return false;
 }
 
 static bool xfer_snap_processes(gdb_stub_t* stub)
 {
+    static const char* proc_list_header =
+        "<osdata type=\"processes\">\n";
+
+    static const char* proc_list_fmt =
+            "<item>\n"
+            "<column name=\"pid\">%u</column>\n"
+            "<column name=\"command\">%s</column>\n"
+            "</item>\n";
+
+    static const char* proc_list_footer = "</osdata>";
+
     Result res;
     u64 our_pid;
     u64 pids[100];
     s32 num_pids = 0;
 
     stub->xfer[0] = '\0';
-    stub->xfer_pos = 0u;
+    stub->xfer_len = 0u;
 
     if (!xfer_printf(stub, "%s", proc_list_header))
     {
@@ -229,15 +224,46 @@ static bool xfer_snap_processes(gdb_stub_t* stub)
 
 err:
     stub->xfer[0] = '\0';
-    stub->xfer_pos = 0u;
+    stub->xfer_len = 0u;
     return false;
+}
+
+static bool gdb_stub_send_xfer(gdb_stub_t* stub, size_t offset, size_t length)
+{
+    logf("%s\n", __FUNCTION__);
+
+    if (stub->xfer_len != 0u)
+    {
+        bool more = true;
+        size_t start = offset;
+        size_t end = offset + length;
+
+        if (end >= stub->xfer_len)
+        {
+            end = stub->xfer_len;
+            more = false;
+        }
+
+        gdb_stub_packet_begin(stub);
+        gdb_stub_packet_write(stub, more ? "m" : "l", 1u);
+        if (start < end)
+        {
+            gdb_stub_packet_write(stub, &stub->xfer[start], end - start);
+        }
+        gdb_stub_packet_end(stub);
+    }
+    else
+    {
+        gdb_stub_send_packet(stub, "l");
+    }
+
+    return true;
 }
 
 static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req)
 {
     logf("%s\n", __FUNCTION__);
 
-    // TODO: check if the annex is different than the snapshot
     if (req->offset == 0u)
     {
         if (*req->annex == '\0' ||
@@ -255,29 +281,64 @@ static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req)
         }
     }
 
-    if (stub->xfer_pos != 0u)
+    return gdb_stub_send_xfer(stub, req->offset, req->length);
+}
+
+static bool xfer_snap_threads(gdb_stub_t* stub)
+{
+    static const char* thread_list_header =
+        "<?xml version=\"1.0\"?>\n"
+        "<threads>\n";
+    static const char* thread_list_footer = "</threads>";
+    static const char* thread_list_fmt = "<thread id=\"p%lx.%lx\" />";
+
+    stub->xfer[0] = '\0';
+    stub->xfer_len = 0u;
+
+    if (stub->session == INVALID_HANDLE)
     {
-        logf("xfer_pos=%lu\n", stub->xfer_pos);
-        bool more = true;
-        size_t start = req->offset;
-        size_t end = req->offset + req->length;
-
-        if (end >= stub->xfer_pos)
-        {
-            end = stub->xfer_pos;
-            more = false;
-        }
-
-        logf("start=%lu, end=%lu, more=%d\n", start, end, more ? 1u : 0u);
-        gdb_stub_packet_begin(stub);
-        gdb_stub_packet_write(stub, more ? "m" : "l", 1u);
-        if (start < end)
-        {
-            gdb_stub_packet_write(stub, &stub->xfer[start], end - start);
-        }
-        gdb_stub_packet_end(stub);
         return true;
     }
 
+    if (!xfer_printf(stub, "%s", thread_list_header))
+    {
+        goto err;
+    }
+
+    for(u32 i = 0u; i < MAX_THREADS; ++i)
+    {
+        if (stub->thread[i].tid != UINT64_MAX)
+        {
+            if (!xfer_printf(stub, thread_list_fmt, stub->pid, stub->thread[i].tid))
+            {
+                goto err;
+            }
+        }
+    }
+
+    if (!xfer_printf(stub, "%s", thread_list_footer))
+    {
+        goto err;
+    }
+
+    return true;
+err:
+    stub->xfer[0] = '\0';
+    stub->xfer_len = 0u;
     return false;
+}
+
+static bool gdb_stub_xfer_threads(gdb_stub_t* stub, gdb_xfer_req_t* req)
+{
+    if (req->offset == 0u)
+    {
+        if (*req->annex != 0u ||
+            !xfer_snap_threads(stub))
+        {
+            gdb_stub_send_error(stub, 0u);
+            return true;
+        }
+    }
+
+    return gdb_stub_send_xfer(stub, req->offset, req->length);
 }

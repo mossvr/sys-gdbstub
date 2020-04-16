@@ -58,7 +58,7 @@ static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length
 static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_query_supported\n");
-    gdb_stub_send_packet(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+");
+    gdb_stub_send_packet(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+;qXfer:threads:read+");
     return true;
 }
 
@@ -68,4 +68,3 @@ static bool gdb_stub_query_attached(gdb_stub_t* stub, char* packet, size_t lengt
     gdb_stub_send_packet(stub, "1");
     return true;
 }
-
