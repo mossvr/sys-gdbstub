@@ -382,12 +382,8 @@ static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
             }
         }
     }
-    else
-    {
-        // the server will detach us when the socket is closed
-        gdb_stub_send_packet(stub, "OK");
-    }
     
+    gdb_stub_send_packet(stub, "OK");
     return true;
 }
 
