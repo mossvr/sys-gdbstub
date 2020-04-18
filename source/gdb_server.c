@@ -243,25 +243,6 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
             {
                 logf("updating poll fds\n");
                 gdb_server_update_fds(server);
-
-// quit when there are no more connections
-#if 1
-                // test
-                bool quit = true;
-                for(size_t i = 0u; i < MAX_CLIENTS; ++i)
-                {
-                    if(server->clients[i].sock != -1)
-                    {
-                        quit = false;
-                    }
-                }
-
-                if(quit)
-                {
-                    logf("quitting...\n");
-                    return false;
-                }
-#endif
             }
 
             logf("starting poll\n");
