@@ -4,6 +4,12 @@ all: sysmodule/sys-gdbstub.nsp applet/gdbstub.nro out
 
 dist: sys-gdbstub.zip
 
+clean:
+	$(MAKE) -C applet clean
+	$(MAKE) -C sysmodule clean
+	rm -rf out
+	rm -rf sys-gdbstub.zip
+
 applet/gdbstub.nro: .FORCE
 	$(MAKE) -C applet
 
@@ -25,4 +31,4 @@ sys-gdbstub.zip: out
 
 .FORCE:
 
-.PHONY: all dist
+.PHONY: all dist clean
