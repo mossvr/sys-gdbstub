@@ -16,10 +16,64 @@
 #define logf(fmt, ...)
 #endif
 
+#define DEBUG 1
+
+
+#if !DEBUG
+// Adjust size as needed.
+#define INNER_HEAP_SIZE 0x20000
+size_t nx_inner_heap_size = INNER_HEAP_SIZE;
+char   nx_inner_heap[INNER_HEAP_SIZE];
+
+void __libnx_initheap(void)
+{
+	void*  addr = nx_inner_heap;
+	size_t size = nx_inner_heap_size;
+
+	// Newlib
+	extern char* fake_heap_start;
+	extern char* fake_heap_end;
+
+	fake_heap_start = (char*)addr;
+	fake_heap_end   = (char*)addr + size;
+}
+
+static const SocketInitConfig socket_config = {
+    .bsdsockets_version = 1,
+
+    .tcp_tx_buf_size        = 0x1000,
+    .tcp_rx_buf_size        = 0x1000,
+    .tcp_tx_buf_max_size    = 0,
+    .tcp_rx_buf_max_size    = 0,
+
+    .udp_tx_buf_size = 0,
+    .udp_rx_buf_size = 0,
+
+    .sb_efficiency = 2,
+
+    .num_bsd_sessions = 3,
+    .bsd_service_type = BsdServiceType_Auto,
+};
+#endif
+
 int main(int argc, char* argv[])
 {
-    socketInitializeDefault();
-    int nxlink_fd = nxlinkStdio();
+    Result res;
+
+#if DEBUG
+    res = socketInitializeDefault();
+#else
+    res = socketInitialize(&socket_config);
+#endif
+    if (R_FAILED(res))
+    {
+        return -1;
+    }
+    int nxlink_fd = -1;
+
+#if DEBUG
+    nxlink_fd = nxlinkStdio();
+#endif
 
     gdb_server_t* server;
     Waiter waiters[8];
@@ -49,7 +103,7 @@ int main(int argc, char* argv[])
         {
             logf("got %lu waiters\n", nwaiters);
         }
-        
+
 
         logf("waiting for an event\n");
         waitObjects(&idx, waiters, nwaiters, 100000000u);

@@ -1,7 +1,7 @@
 .cproject
 .project
 .settings
+.vscode
 build/
-/*.elf
-/*.nacp
-/*.nro
+out/
+/*.zip

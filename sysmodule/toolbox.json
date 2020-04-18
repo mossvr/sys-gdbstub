@@ -1,0 +1,5 @@
+{
+    "name"  : "sys-gdbstub",
+    "tid"   : "4200000000474442",
+    "requires_reboot": false
+}

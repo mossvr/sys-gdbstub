@@ -1,0 +1,7 @@
+build/
+/*.elf
+/*.nacp
+/*.npdm
+/*.nro
+/*.nso
+/*.nsp
