@@ -53,7 +53,7 @@ struct gdb_stub
 
     gdb_stub_thread_t thread[MAX_THREADS];
     u32 selected_thread;
-    u64 code_addr;
+    u64 base_addr;
     u32 exception_type;
 
     gdb_stub_breakpoint_t hw_breakpoints[MAX_HW_BREAKPOINTS];

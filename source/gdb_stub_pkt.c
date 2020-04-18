@@ -442,6 +442,7 @@ static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
             svcCloseHandle(stub->session);
             stub->session = INVALID_HANDLE;
             stub->pid = UINT64_MAX;
+            stub->base_addr = 0u;
             gdb_stub_send_packet(stub, "OK");
         }
         else
@@ -455,6 +456,64 @@ static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
     }
     
     return true;
+}
+
+static uint64_t find_main_base(gdb_stub_t* stub)
+{
+    Result res;
+    MemoryInfo mem_info;
+    uint32_t dummy;
+    uint64_t addr = 0u;
+    bool done = false;
+    uint32_t module_count = 0u;
+    uint64_t base = 0u;
+
+    do
+    {
+        res = svcQueryDebugProcessMemory(&mem_info, &dummy, stub->session, addr);
+        if (R_FAILED(res))
+        {
+            logf("svcQueryDebugProcessMemory failed\n");
+            break;
+        }
+
+        if (mem_info.type == MemType_CodeStatic &&
+            mem_info.perm == Perm_Rx)
+        {
+            uint32_t offset;
+            module_header_t module;
+
+            res = svcReadDebugProcessMemory(&offset, stub->session, mem_info.addr + 4u, sizeof(offset));
+            if (R_FAILED(res))
+            {
+                logf("svcReadDebugProcessMemory failed\n");
+                break;
+            }
+
+            res = svcReadDebugProcessMemory(&module, stub->session, mem_info.addr + offset, sizeof(module));
+            if (R_FAILED(res))
+            {
+                logf("svcReadDebugProcessMemory failed\n");
+                break;
+            }
+
+            if (module.magic == MOD0_MAGIC)
+            {
+                logf("found module at addr 0x%lX\n", mem_info.addr);
+                base = addr;
+                module_count++;
+                if (module_count == 2u)
+                {
+                    break;
+                }
+            }
+        }
+
+        done = mem_info.addr + mem_info.size <= addr;
+        addr = mem_info.addr + mem_info.size;
+    } while (!done);
+    
+    return base;
 }
 
 static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
@@ -485,6 +544,7 @@ static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
     }
 
     stub->pid = pid;
+    stub->base_addr = find_main_base(stub);
 
     logf("svcDebugActiveProcess succeeded\n");
     gdb_stub_send_stop_reply(stub);

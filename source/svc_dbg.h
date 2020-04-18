@@ -106,5 +106,16 @@ typedef struct
     };
 } debug_event_t;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t dynamic_offset;
+    uint32_t bss_start_offset;
+    uint32_t bss_end_offset;
+    uint32_t unwind_start_offset;
+    uint32_t unwind_end_offset;
+    uint32_t module_object_offset;
+} module_header_t;
+
+#define MOD0_MAGIC 0x30444F4D
 
 #endif /* SOURCE_DBG_SVC_H_ */

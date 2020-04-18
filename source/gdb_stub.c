@@ -555,10 +555,6 @@ static void gdb_stub_event(gdb_stub_t* stub, const debug_event_t* event)
     case DEBUG_EVENT_ATTACH_PROCESS:
         break;
     case DEBUG_EVENT_ATTACH_THREAD:
-        if(stub->code_addr == 0u)
-        {
-            stub->code_addr = event->attach_thread.entry_point;
-        }
         gdb_stub_attach_thread(stub, event->thread_id);
         break;
     case DEBUG_EVENT_EXIT_PROCESS:

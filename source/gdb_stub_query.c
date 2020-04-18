@@ -43,7 +43,7 @@ bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length)
 static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length)
 {
     const char* text_str = "TextSeg=";
-    u64 addr = stub->code_addr;
+    u64 addr = stub->base_addr;
 
     logf("gdb_stub_query_offsets (TextSeg=0x%lX)\n", addr);
 
