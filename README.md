@@ -1,5 +1,8 @@
 # sys-gdbstub
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-bri)](LICENSE)
+[![Build Status](https://travis-ci.com/mossvr/sys-gdbstub.svg?branch=master)](https://travis-ci.com/mossvr/sys-gdbstub)
+
 GDB Stub Sysmodule for the Nintendo Switch.
 
 ## What works
