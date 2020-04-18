@@ -10,7 +10,6 @@
 
 #include "gdb_stub.h"
 #include "svc_dbg.h"
-#include "error.h"
 
 #define BUFFER_SIZE 512u
 #define MAX_THREADS 20u

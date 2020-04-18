@@ -8,7 +8,6 @@
 
 #include "gdb_stub.h"
 #include "svc_dbg.h"
-#include "error.h"
 
 #include "gdb_stub_priv.h"
 
@@ -342,15 +341,15 @@ void gdb_stub_destroy(gdb_stub_t* stub)
     free(stub);
 }
 
-Result gdb_stub_get_waiter(gdb_stub_t* stub, Waiter* waiter)
+bool gdb_stub_get_waiter(gdb_stub_t* stub, Waiter* waiter)
 {
     if(stub->session != INVALID_HANDLE)
     {
         *waiter = waiterForHandle(stub->session);
-        return 0;
+        return true;
     }
 
-    return MAKERESULT(Module_SysGdbStub, SysGdbStubError_NoActiveSession);
+    return false;
 }
 
 static void print_debug_event(debug_event_t* event)

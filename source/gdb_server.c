@@ -9,14 +9,13 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <poll.h>
+#include <switch/services/bsd.h>
 
 #include "gdb_server.h"
 #include "gdb_stub.h"
 #include "poll_thread.h"
 
-#define MAX_CLIENTS 4
-
-#if 0
+#if 1
 #define logf(fmt, ...) printf("gdb_server: " fmt, ##__VA_ARGS__)
 #else
 #define logf(fmt, ...)
@@ -33,8 +32,8 @@ struct gdb_server
     int sock;
 
     poll_thread_t poll;
-    struct pollfd fds[MAX_CLIENTS+1u];
-    gdb_client_t clients[MAX_CLIENTS];
+    struct pollfd fds[GDB_MAX_CLIENTS+1u];
+    gdb_client_t clients[GDB_MAX_CLIENTS];
 
     char rx_buffer[512];
 };
@@ -43,8 +42,6 @@ static void gdb_server_update_fds(gdb_server_t* server);
 static bool gdb_server_accept(gdb_server_t* server);
 static void gdb_stub_output(gdb_stub_t* stub, char* buffer, size_t length, void* arg);
 static void gdb_client_destroy(gdb_client_t* client);
-
-#include <switch/services/bsd.h>
 
 gdb_server_t* gdb_server_create(int port)
 {
@@ -60,7 +57,7 @@ gdb_server_t* gdb_server_create(int port)
         goto err;
     }
 
-    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+    for(size_t i = 0u; i < GDB_MAX_CLIENTS; ++i)
     {
         server->clients[i].sock = -1;
     }
@@ -78,6 +75,15 @@ gdb_server_t* gdb_server_create(int port)
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
+
+    // reuse address
+    int val = 1;
+    res = setsockopt(server->sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    if (res < 0)
+    {
+        logf("setsockopt failed\n");
+        goto err_2;
+    }
 
     res = bind(server->sock, (struct sockaddr*)&addr, sizeof(addr));
     if(res < 0)
@@ -99,7 +105,7 @@ gdb_server_t* gdb_server_create(int port)
     }
 
     gdb_server_update_fds(server);
-    poll_thread_poll(&server->poll, server->fds, MAX_CLIENTS + 1u, -1);
+    poll_thread_poll(&server->poll, server->fds, GDB_MAX_CLIENTS + 1u, -1);
 
     return server;
 err_2:
@@ -113,28 +119,22 @@ err:
 
 int gdb_server_waiters(gdb_server_t* server, Waiter* waiters, size_t max)
 {
-    logf("%s\n", __PRETTY_FUNCTION__);
-
-    Result res;
     int count = 0;
 
-    if(max < MAX_CLIENTS + 1u)
+    if (max < GDB_MAX_WAITERS)
     {
         return -1;
     }
 
     waiters[count++] = poll_thread_waiter(&server->poll);
 
-    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+    for(size_t i = 0u; i < GDB_MAX_CLIENTS; ++i)
     {
         gdb_client_t* client = &server->clients[i];
-        if(client->stub != NULL)
+        if(client->stub != NULL &&
+            gdb_stub_get_waiter(client->stub, &waiters[count]))
         {
-            res = gdb_stub_get_waiter(client->stub, &waiters[count]);
-            if(R_SUCCEEDED(res))
-            {
-                count++;
-            }
+            count++;
         }
     }
 
@@ -149,7 +149,7 @@ static void gdb_server_update_fds(gdb_server_t* server)
 
     memset(server->fds, 0, sizeof(server->fds));
 
-    for(size_t i = 0; i < MAX_CLIENTS; ++i)
+    for(size_t i = 0; i < GDB_MAX_CLIENTS; ++i)
     {
         if(server->clients[i].sock == -1)
         {
@@ -160,7 +160,7 @@ static void gdb_server_update_fds(gdb_server_t* server)
         server->fds[i+1u].events = POLLIN;
     }
 
-    logf("%s accepting clients\n", accept_clients ? "are" : "not");
+    logf("%s accepting clients\n", accept_clients ? "is" : "not");
 
     server->fds[0].fd = accept_clients ? server->sock : -1;
     server->fds[0].events = POLLIN;
@@ -192,24 +192,20 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
                 else if((server->fds[0].revents & POLLIN) != 0u)
                 {
                     logf("accepting client\n");
-                    if(gdb_server_accept(server))
+                    if (gdb_server_accept(server))
                     {
                         update_fds = true;
                     }
                     else
                     {
                         logf("accept failed\n");
-                        // don't try to accept another client until one disconnects
-                        server->fds[0].fd = -1;
-
-                        // give up for now
                         return false;
                     }
                 }
             }
 
             // check for client socket events
-            for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+            for(size_t i = 0u; i < GDB_MAX_CLIENTS; ++i)
             {
                 gdb_client_t* client = &server->clients[i];
 
@@ -247,14 +243,14 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
 
             logf("starting poll\n");
             // start the next poll
-            poll_thread_poll(&server->poll, server->fds, MAX_CLIENTS + 1u, -1);
+            poll_thread_poll(&server->poll, server->fds, GDB_MAX_CLIENTS + 1u, -1);
             logf("poll started\n");
         }
     }
     else
     {
         // handle gdb stub events
-        for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+        for(size_t i = 0u; i < GDB_MAX_CLIENTS; ++i)
         {
             gdb_client_t* client = &server->clients[i];
             if(client->stub != NULL)
@@ -264,7 +260,6 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
         }
     }
 
-    logf("returning from %s\n", __PRETTY_FUNCTION__);
     return true;
 }
 
@@ -273,7 +268,7 @@ void gdb_server_destroy(gdb_server_t* server)
     logf("%s\n", __PRETTY_FUNCTION__);
     
     // destroy the clients
-    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+    for(size_t i = 0u; i < GDB_MAX_CLIENTS; ++i)
     {
         gdb_client_destroy(&server->clients[i]);
     }
@@ -293,7 +288,7 @@ static bool gdb_server_accept(gdb_server_t* server)
 
     gdb_client_t* client = NULL;
 
-    for(size_t i = 0u; i < MAX_CLIENTS; ++i)
+    for(size_t i = 0u; i < GDB_MAX_CLIENTS; ++i)
     {
         if(server->clients[i].sock == -1)
         {
@@ -304,18 +299,21 @@ static bool gdb_server_accept(gdb_server_t* server)
 
     if(client == NULL)
     {
+        logf("too many clients\n");
         goto err;
     }
 
     client->stub = gdb_stub_create(gdb_stub_output, client);
     if(client->stub == NULL)
     {
+        logf("gdb_stub_create failed\n");
         goto err;
     }
 
     client->sock = accept(server->sock, NULL, NULL);
     if(client->sock < 0)
     {
+        logf("accept failed\n");
         goto err_1;
     }
 

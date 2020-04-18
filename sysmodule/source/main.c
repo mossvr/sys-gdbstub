@@ -1,14 +1,11 @@
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <poll.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include <switch.h>
 
-#include "error.h"
-#include "gdb_server.h"
+#include "gdb_main.h"
 
 #if 0
 #define logf(fmt, ...) printf("main: " fmt, ##__VA_ARGS__)
@@ -45,7 +42,7 @@ void __attribute__((weak)) __appInit(void)
     // Initialize default services.
     rc = smInitialize();
     if (R_FAILED(rc))
-        fatalThrow(MAKERESULT(Module_Libnx, LibnxError_InitFail_SM));
+        fatalThrow(rc);
 
     static const SocketInitConfig socket_config = {
         .bsdsockets_version = 1,
@@ -66,7 +63,7 @@ void __attribute__((weak)) __appInit(void)
 
     rc = socketInitialize(&socket_config);
     if (R_FAILED(rc))
-        fatalThrow(MAKERESULT(Module_SysGdbStub, SysGdbStubError_InitFail_Sockets));
+        fatalThrow(rc);
 }
 
 void __attribute__((weak)) userAppExit(void);
@@ -81,49 +78,26 @@ void __attribute__((weak)) __appExit(void)
 // Main program entrypoint
 int main(int argc, char* argv[])
 {
-    gdb_server_t* server;
-    Waiter waiters[8];
-    ssize_t nwaiters;
-
-    logf("sys-gdbstub init\n");
-    server = gdb_server_create(10000);
-    if(server == NULL)
-    {
-        logf("gdb_server_create failed\n");
-        return -1;
-    }
+    bool quit = false;
 
     logf("sys-gdbstub started\n");
-    while (true)
+    while (!quit)
     {
-        s32 idx;
-
-        logf("getting waiters from gdb server...\n");
-        nwaiters = gdb_server_waiters(server, waiters, 8);
-        if(nwaiters <= 0)
+        if (gdb_main_init() != 0)
         {
-            logf("gdb_server_waiters error\n");
             break;
         }
-        else
-        {
-            logf("got %lu waiters\n", nwaiters);
-        }
 
-
-        logf("waiting for an event\n");
-        waitObjects(&idx, waiters, nwaiters, UINT64_MAX);
-        if (idx >= 0)
+        while(true)
         {
-            if(!gdb_server_handle_event(server, idx))
+            if (gdb_main_run(UINT64_MAX) != 0)
             {
-                logf("gdb_server_handle_event returned false\n");
                 break;
             }
         }
+
+        gdb_main_exit();
     }
 
-    logf("exiting\n");
-    gdb_server_destroy(server);
     return 0;
 }

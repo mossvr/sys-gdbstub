@@ -8,6 +8,9 @@
 #include <stdbool.h>
 #include <switch/kernel/wait.h>
 
+#define GDB_MAX_CLIENTS 1
+#define GDB_MAX_WAITERS (GDB_MAX_CLIENTS + 1)
+
 typedef struct gdb_server gdb_server_t;
 
 gdb_server_t* gdb_server_create(int port);
