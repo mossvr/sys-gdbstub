@@ -298,11 +298,12 @@ static bool xfer_snap_threads(gdb_stub_t* stub)
         goto err;
     }
 
-    for(u32 i = 0u; i < MAX_THREADS; ++i)
+    for(int i = 0; i < MAX_THREADS; ++i)
     {
-        if (stub->thread[i].tid != UINT64_MAX)
+        if (stub->thread[i].tid >= 0)
         {
-            if (!xfer_printf(stub, thread_list_fmt, stub->pid, stub->thread[i].tid))
+            if (!xfer_printf(stub, thread_list_fmt,
+                (unsigned int)stub->pid, (unsigned int)stub->thread[i].tid))
             {
                 goto err;
             }

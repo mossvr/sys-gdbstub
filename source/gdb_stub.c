@@ -14,8 +14,6 @@
 
 static const char hex_chars[] = "0123456789abcdef";
 
-static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal);
-
 gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
 {
     gdb_stub_t* stub = calloc(1u, sizeof(*stub));
@@ -29,13 +27,13 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     stub->rx.state = CMD_STATE_START;
 
     stub->session = INVALID_HANDLE;
-    stub->pid = UINT64_MAX;
-    stub->selected_thread = UINT32_MAX;
+    stub->pid = -1;
+    stub->selected_thread = -1;
     stub->exception_type = UINT32_MAX;
 
     for(u32 i = 0u; i < MAX_THREADS; ++i)
     {
-        stub->thread[i].tid = UINT64_MAX;
+        stub->thread[i].tid = -1;
     }
 
     return stub;
@@ -78,7 +76,7 @@ int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_
     return dec_len;
 }
 
-bool gdb_stub_parse_thread_id(const char* input, s64* o_pid, s64* o_tid)
+bool gdb_stub_parse_thread_id(const char* input, int* o_pid, int* o_tid)
 {
     char* end;
     
@@ -108,6 +106,12 @@ void gdb_stub_putc(gdb_stub_t* stub, char c)
 
 void gdb_stub_packet_begin(gdb_stub_t* stub)
 {
+    if (stub->tx.state != CMD_STATE_START)
+    {
+        logf("%s: already building a packet\n", __FUNCTION__);
+        return;
+    }
+
     stub->tx.state = CMD_STATE_DATA;
     stub->tx.checksum = 0u;
     stub->tx.pos = 0u;
@@ -115,11 +119,11 @@ void gdb_stub_packet_begin(gdb_stub_t* stub)
     stub->tx.cache[stub->tx.pos++] = '$';
 }
 
-bool gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
+void gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
 {
     if(stub->tx.state != CMD_STATE_DATA)
     {
-        return false;
+        return;
     }
 
     while(len != 0u)
@@ -146,42 +150,66 @@ bool gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
         data++;
         len--;
     }
-
-    return true;
 }
 
-bool gdb_stub_packet_write_hex_le(gdb_stub_t* stub, const void* data, size_t data_len)
+void gdb_stub_packet_write_hex_le(gdb_stub_t* stub, const void* data, size_t data_len)
 {
     for(uint32_t i = 0u; i != data_len; ++i)
     {
         gdb_stub_packet_write(stub, &hex_chars[(((uint8_t*)data)[i] >> 4u) & 0xFu], 1u);
         gdb_stub_packet_write(stub, &hex_chars[((uint8_t*)data)[i] & 0xFu], 1u);
     }
-
-    return true;
 }
 
-bool gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, size_t data_len)
+void gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, size_t data_len)
 {
     for(uint32_t i = data_len; i != 0u; --i)
     {
         gdb_stub_packet_write(stub, &hex_chars[(((uint8_t*)data)[i-1u] >> 4u) & 0xFu], 1u);
         gdb_stub_packet_write(stub, &hex_chars[((uint8_t*)data)[i-1u] & 0xFu], 1u);
     }
-
-    return true;
 }
 
-bool gdb_stub_packet_write_str(gdb_stub_t* stub, const void* str)
+void gdb_stub_packet_write_str(gdb_stub_t* stub, const void* str)
 {
-    return gdb_stub_packet_write(stub, str, strlen(str));
+    gdb_stub_packet_write(stub, str, strlen(str));
 }
 
-bool gdb_stub_packet_end(gdb_stub_t* stub)
+void gdb_stub_packet_write_thread_id(gdb_stub_t* stub, int pid, int tid)
+{
+    char* buf = (char*)stub->mem;
+    size_t buf_len = sizeof(stub->mem);
+
+    gdb_stub_packet_write_str(stub, "p");
+
+    if (pid < 0)
+    {
+        snprintf(buf, buf_len, "-%lx.", (long unsigned int)(pid * -1));
+    }
+    else
+    {
+        snprintf(buf, buf_len, "%lx.", (long unsigned int)pid);
+    }
+
+    gdb_stub_packet_write_str(stub, buf);
+
+    if (tid < 0)
+    {
+        snprintf(buf, buf_len, "-%lx", (long unsigned int)(tid * -1));
+    }
+    else
+    {
+        snprintf(buf, buf_len, "%lx", (long unsigned int)tid);
+    }
+
+    gdb_stub_packet_write_str(stub, buf);
+}
+
+void gdb_stub_packet_end(gdb_stub_t* stub)
 {
     if(stub->tx.state != CMD_STATE_DATA)
     {
-        return false;
+        return;
     }
 
     // flush the tx cache if it's full
@@ -200,7 +228,6 @@ bool gdb_stub_packet_end(gdb_stub_t* stub)
     stub->tx.pos = 0u;
     stub->tx.state = CMD_STATE_START;
 
-    return true;
 }
 
 void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet)
@@ -212,31 +239,38 @@ void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet)
 
 void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err)
 {
-    logf("<<<<<<<<<<<<<<<<<< gdb_stub_send_error (err=0x%X)\n", err);
+    logf("%s (err=0x%X)\n", __FUNCTION__, err);
     gdb_stub_packet_begin(stub);
     gdb_stub_packet_write(stub, "E", 1u);
     gdb_stub_packet_write_hex_le(stub, &err, sizeof(err));
     gdb_stub_packet_end(stub);
 }
 
-static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t sig)
+static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal, const char* reason)
 {
-    logf("<<<<<<<<<<<<<<<<<< gdb_stub_send_signal (signal=0x%X)\n", sig);
-    gdb_stub_packet_begin(stub);
-    gdb_stub_packet_write(stub, "S", 1u);
-    gdb_stub_packet_write_hex_le(stub, &sig, sizeof(sig));
-    gdb_stub_packet_end(stub);
-}
-
-static void gdb_stub_send_trap(gdb_stub_t* stub, const char* reason)
-{
-    u8 sig = 0x05u;
-    logf("<<<<<<<<<<<<<<<<<< gdb_stub_send_trap (reason=%s)\n", reason);
+    logf("%s (signal=%u, reason=%s, thread=%d)\n", __FUNCTION__, signal, reason, stub->selected_thread);
     gdb_stub_packet_begin(stub);
     gdb_stub_packet_write(stub, "T", 1u);
-    gdb_stub_packet_write_hex_le(stub, &sig, sizeof(sig));
-    gdb_stub_packet_write(stub, reason, strlen(reason));
-    gdb_stub_packet_write(stub, ":", 1u);
+    gdb_stub_packet_write_hex_le(stub, &signal, sizeof(signal));
+    
+    gdb_stub_packet_write_str(stub, "thread:");
+    if (stub->selected_thread >= 0)
+    {
+        gdb_stub_packet_write_thread_id(stub, stub->pid, stub->thread[stub->selected_thread].tid);
+    }
+    else
+    {
+        gdb_stub_packet_write_thread_id(stub, stub->pid, 0);
+    }
+
+    gdb_stub_packet_write_str(stub, ";");
+
+    if (*reason != '\0')
+    {
+        gdb_stub_packet_write_str(stub, reason);
+        gdb_stub_packet_write_str(stub, ":;");
+    }
+
     gdb_stub_packet_end(stub);
 }
 
@@ -475,14 +509,7 @@ void gdb_stub_send_stop_reply(gdb_stub_t* stub)
         break;
     }
 
-    if(*reason == '\0')
-    {
-        gdb_stub_send_signal(stub, 0u);
-    }
-    else
-    {
-        gdb_stub_send_trap(stub, reason);
-    }
+    gdb_stub_send_signal(stub, 0u, reason);
 }
 
 static uint64_t find_main_base(gdb_stub_t* stub)
@@ -543,19 +570,19 @@ static uint64_t find_main_base(gdb_stub_t* stub)
     return base;
 }
 
-bool gdb_stub_attach(gdb_stub_t* stub, u64 pid)
+bool gdb_stub_attach(gdb_stub_t* stub, int pid)
 {
-    if (stub->session != INVALID_HANDLE)
+    if (stub->session != INVALID_HANDLE || pid < 0)
     {
         return false;
     }
 
-    logf("attaching to %lu\n", pid);
-    if(R_FAILED(svcDebugActiveProcess(&stub->session, pid)))
+    logf("attaching to %d\n", pid);
+    if(R_FAILED(svcDebugActiveProcess(&stub->session, (u64)pid)))
     {
         logf("svcDebugActiveProcess failed\n");
         stub->session = INVALID_HANDLE;
-        stub->pid = UINT64_MAX;
+        stub->pid = -1;
         return false;
     }
 
@@ -565,7 +592,7 @@ bool gdb_stub_attach(gdb_stub_t* stub, u64 pid)
     return true;
 }
 
-bool gdb_stub_detach(gdb_stub_t* stub, u64 pid)
+bool gdb_stub_detach(gdb_stub_t* stub, int pid)
 {
     if (stub->session == INVALID_HANDLE ||
         pid != stub->pid)
@@ -575,55 +602,80 @@ bool gdb_stub_detach(gdb_stub_t* stub, u64 pid)
 
     svcCloseHandle(stub->session);
     stub->session = INVALID_HANDLE;
-    stub->pid = UINT64_MAX;
+    stub->pid = -1;
+    stub->selected_thread = -1;
     stub->base_addr = 0u;
 
     for (uint32_t i = 0u; i < MAX_THREADS; ++i)
     {
-        stub->thread[i].tid = UINT64_MAX;
+        stub->thread[i].tid = -1;
     }
 
     return true;
 }
 
-static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* exception)
+static void gdb_stub_exception(gdb_stub_t* stub, int tid, const debug_exception_t* exception)
 {
     stub->exception_type = exception->type;
+
+    int idx = gdb_stub_thread_id_to_index(stub, tid);
+    if (idx < MAX_THREADS)
+    {
+        stub->selected_thread = idx;
+    }
+    else
+    {
+        stub->selected_thread = gdb_stub_first_thread_index(stub);
+    }
+    logf("selected thread %d\n", stub->selected_thread);
     
     for(u32 i = 0u; i < MAX_THREADS; ++i)
     {
-        if(stub->thread[i].tid != UINT64_MAX)
+        if(stub->thread[i].tid >= 0)
         {
-            svcGetDebugThreadContext(&stub->thread[i].ctx, stub->session, stub->thread[i].tid, RegisterGroup_All);
+            svcGetDebugThreadContext(&stub->thread[i].ctx, stub->session, (u64)stub->thread[i].tid, RegisterGroup_All);
         }
     }
 
     gdb_stub_send_stop_reply(stub);
 }
 
-u32 gdb_stub_thread_id_to_index(gdb_stub_t* stub, u64 tid)
+int gdb_stub_first_thread_index(gdb_stub_t* stub)
 {
-    for(u32 i = 0u; i < MAX_THREADS; ++i)
+    for(int i = 0; i < MAX_THREADS; ++i)
     {
-        if(stub->thread[i].tid == tid)
+        if(stub->thread[i].tid >= 0)
         {
             return i;
         }
     }
 
-    return UINT32_MAX;
+    return -1;
 }
 
-static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
+int gdb_stub_thread_id_to_index(gdb_stub_t* stub, int tid)
 {
-    u32 thread_idx = gdb_stub_thread_id_to_index(stub, thread_id);
+    for (int i = 0; i < MAX_THREADS; ++i)
+    {
+        if (stub->thread[i].tid == tid)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static void gdb_stub_attach_thread(gdb_stub_t* stub, int thread_id)
+{
+    int thread_idx = gdb_stub_thread_id_to_index(stub, thread_id);
 
     // if it's a new thread, find a slot for it
-    if (thread_idx == UINT32_MAX)
+    if (thread_idx < 0)
     {
-        for(u32 i = 0u; i < MAX_THREADS; ++i)
+        for (int i = 0; i < MAX_THREADS; ++i)
         {
-            if(stub->thread[i].tid == UINT64_MAX)
+            if (stub->thread[i].tid < 0)
             {
                 thread_idx = i;
                 break;
@@ -631,31 +683,31 @@ static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
         }
 
         // check if we've exceeded max threads
-        if (thread_idx == UINT32_MAX)
+        if (thread_idx < 0)
         {
             logf("exceeded max threads\n");
             return;
         }
 
         stub->thread[thread_idx].tid = thread_id;
-        logf("thread %lu attached (idx=%u)\n", thread_id, thread_idx);
+        logf("thread %d attached (idx=%d)\n", thread_id, thread_idx);
     }
 
-    svcGetDebugThreadContext(&stub->thread[thread_idx].ctx, stub->session, thread_id, RegisterGroup_All);
+    svcGetDebugThreadContext(&stub->thread[thread_idx].ctx, stub->session, (u64)thread_id, RegisterGroup_All);
 }
 
-static void gdb_stub_exit_thread(gdb_stub_t* stub, u64 thread_id)
+static void gdb_stub_exit_thread(gdb_stub_t* stub, int thread_id)
 {
-    u32 idx = gdb_stub_thread_id_to_index(stub, thread_id);
+    int idx = gdb_stub_thread_id_to_index(stub, thread_id);
     if (idx < MAX_THREADS)
     {
-        logf("thread %lu detached\n", thread_id);
+        logf("thread %d detached\n", thread_id);
         memset(&stub->thread[idx], 0, sizeof(stub->thread[idx]));
-        stub->thread[idx].tid = UINT64_MAX;
+        stub->thread[idx].tid = -1;
     }
 }
 
-static void gdb_stub_event(gdb_stub_t* stub, u64 pid, const debug_event_t* event)
+static void gdb_stub_event(gdb_stub_t* stub, int pid, const debug_event_t* event)
 {
     print_debug_event(&stub->event);
 
@@ -664,16 +716,16 @@ static void gdb_stub_event(gdb_stub_t* stub, u64 pid, const debug_event_t* event
     case DEBUG_EVENT_ATTACH_PROCESS:
         break;
     case DEBUG_EVENT_ATTACH_THREAD:
-        gdb_stub_attach_thread(stub, event->thread_id);
+        gdb_stub_attach_thread(stub, (int)event->thread_id);
         break;
     case DEBUG_EVENT_EXIT_PROCESS:
         gdb_stub_detach(stub, pid);
         break;
     case DEBUG_EVENT_EXIT_THREAD:
-        gdb_stub_exit_thread(stub, event->thread_id);
+        gdb_stub_exit_thread(stub, (int)event->thread_id);
         break;
     case DEBUG_EVENT_EXCEPTION:
-        gdb_stub_exception(stub, &event->exception);
+        gdb_stub_exception(stub, (int)event->thread_id, &event->exception);
         break;
     }
 }

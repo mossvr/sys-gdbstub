@@ -85,7 +85,7 @@ static bool gdb_stub_pkt_set(gdb_stub_t* stub, char* packet, size_t length)
 static bool gdb_stub_pkt_set_thread(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("%s\n", __FUNCTION__);
-    s64 pid, tid;
+    int pid, tid;
     char* op = &packet[1];
 
     if (*op != 'g')
@@ -98,19 +98,28 @@ static bool gdb_stub_pkt_set_thread(gdb_stub_t* stub, char* packet, size_t lengt
         goto err;
     }
 
-    if ((pid <= 0 && pid != stub->pid) || tid <= 0)
+    if (pid > 0 && pid != stub->pid)
     {
         goto err;
     }
 
-    for (u32 i = 0u; i < MAX_THREADS; ++i)
+    if (tid <= 0)
     {
-        if (stub->thread[i].tid != UINT64_MAX &&
-            stub->thread[i].tid == (u64)tid)
+        stub->selected_thread = -1;
+        gdb_stub_send_packet(stub, "OK");
+        return true;
+    }
+    else
+    {
+        for (int i = 0; i < MAX_THREADS; ++i)
         {
-            stub->selected_thread = i;
-            gdb_stub_send_packet(stub, "OK");
-            return true;
+            if (stub->thread[i].tid == tid)
+            {
+                stub->selected_thread = i;
+                logf("selected thread (tid=%d, idx=%u)\n", tid, i);
+                gdb_stub_send_packet(stub, "OK");
+                return true;
+            }
         }
     }
 
@@ -122,22 +131,23 @@ err:
 static bool gdb_stub_pkt_thread_alive(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("%s\n", __FUNCTION__);
-    s64 pid, tid;
+    int pid, tid;
 
     if (!gdb_stub_parse_thread_id(packet+1, &pid, &tid))
     {
         goto err;
     }
 
-    if ((pid <= 0 && pid != stub->pid) || tid <= 0)
+    if ((pid > 0 && pid != stub->pid) || tid <= 0)
     {
         goto err;
     }
 
-    u32 idx = gdb_stub_thread_id_to_index(stub, tid);
+    int idx = gdb_stub_thread_id_to_index(stub, tid);
     if (idx < MAX_THREADS)
     {
         gdb_stub_send_packet(stub, "OK");
+        return true;
     }
 
 err:
@@ -250,24 +260,14 @@ static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t l
 {
     logf("gdb_stub_pkt_read_registers\n");
 
-    u32 idx = stub->selected_thread;
+    int idx = stub->selected_thread;
+    if (idx < 0 || idx >= MAX_THREADS)
+    {
+        idx = gdb_stub_first_thread_index(stub);
+    }
 
     gdb_stub_packet_begin(stub);
-
-    if(idx >= MAX_THREADS ||
-            stub->thread[idx].tid == UINT64_MAX)
-    {
-        uint8_t zero = 0u;
-        for (int i = 0; i < 788; ++i)
-        {
-            gdb_stub_packet_write_hex_le(stub, &zero, sizeof(zero));
-        }
-    }
-    else
-    {
-        gdb_stub_packet_write_hex_le(stub, &stub->thread[idx].ctx, 788u);
-    }
-
+    gdb_stub_packet_write_hex_le(stub, &stub->thread[idx].ctx, 788u);
     gdb_stub_packet_end(stub);
 
     return true;
@@ -455,6 +455,7 @@ static bool gdb_stub_pkt_detach(gdb_stub_t* stub, char* packet, size_t length)
 
 static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
 {
+    logf("%s\n", __FUNCTION__);
     u64 pid;
 
     if (sscanf(packet, "vAttach;%lx", &pid) != 1)
@@ -465,7 +466,7 @@ static bool gdb_stub_pkt_attach(gdb_stub_t* stub, char* packet, size_t length)
 
     if (gdb_stub_attach(stub, pid))
     {
-        gdb_stub_send_stop_reply(stub);
+        svcBreakDebugProcess(stub->session);
     }
     else
     {
