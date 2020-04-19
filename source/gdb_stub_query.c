@@ -57,8 +57,18 @@ static bool gdb_stub_query_offsets(gdb_stub_t* stub, char* packet, size_t length
 
 static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_query_supported\n");
-    gdb_stub_send_packet(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+;qXfer:threads:read+");
+    logf("%s\n", __FUNCTION__);
+
+    char* buf = (char*)stub->mem;
+    size_t buf_len = sizeof(stub->mem);
+
+    gdb_stub_packet_begin(stub);
+    gdb_stub_packet_write_str(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+;qXfer:threads:read+");
+
+    snprintf(buf, buf_len, ";PacketSize=%x", BUFFER_SIZE - 1u);
+    gdb_stub_packet_write_str(stub, buf);
+
+    gdb_stub_packet_end(stub);
     return true;
 }
 

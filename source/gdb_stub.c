@@ -172,6 +172,11 @@ bool gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, size_t dat
     return true;
 }
 
+bool gdb_stub_packet_write_str(gdb_stub_t* stub, const void* str)
+{
+    return gdb_stub_packet_write(stub, str, strlen(str));
+}
+
 bool gdb_stub_packet_end(gdb_stub_t* stub)
 {
     if(stub->tx.state != CMD_STATE_DATA)

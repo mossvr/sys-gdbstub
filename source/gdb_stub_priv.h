@@ -93,6 +93,7 @@ void gdb_stub_packet_begin(gdb_stub_t* stub);
 bool gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len);
 bool gdb_stub_packet_write_hex_le(gdb_stub_t* stub, const void* data, size_t data_len);
 bool gdb_stub_packet_write_hex_be(gdb_stub_t* stub, const void* data, size_t data_len);
+bool gdb_stub_packet_write_str(gdb_stub_t* stub, const void* str);
 bool gdb_stub_packet_end(gdb_stub_t* stub);
 
 void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length);
