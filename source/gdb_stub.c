@@ -27,6 +27,10 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     stub->output = output;
     stub->arg = arg;
     stub->rx.state = CMD_STATE_START;
+
+    stub->session = INVALID_HANDLE;
+    stub->pid = UINT64_MAX;
+    stub->selected_thread = UINT32_MAX;
     stub->exception_type = UINT32_MAX;
 
     for(u32 i = 0u; i < MAX_THREADS; ++i)
@@ -474,7 +478,108 @@ void gdb_stub_send_stop_reply(gdb_stub_t* stub)
     {
         gdb_stub_send_trap(stub, reason);
     }
-} 
+}
+
+static uint64_t find_main_base(gdb_stub_t* stub)
+{
+    Result res;
+    MemoryInfo mem_info;
+    uint32_t dummy;
+    uint64_t addr = 0u;
+    bool done = false;
+    uint32_t module_count = 0u;
+    uint64_t base = 0u;
+
+    do
+    {
+        res = svcQueryDebugProcessMemory(&mem_info, &dummy, stub->session, addr);
+        if (R_FAILED(res))
+        {
+            logf("svcQueryDebugProcessMemory failed\n");
+            break;
+        }
+
+        if (mem_info.type == MemType_CodeStatic &&
+            mem_info.perm == Perm_Rx)
+        {
+            uint32_t offset;
+            module_header_t module;
+
+            res = svcReadDebugProcessMemory(&offset, stub->session, mem_info.addr + 4u, sizeof(offset));
+            if (R_FAILED(res))
+            {
+                logf("svcReadDebugProcessMemory failed\n");
+                break;
+            }
+
+            res = svcReadDebugProcessMemory(&module, stub->session, mem_info.addr + offset, sizeof(module));
+            if (R_FAILED(res))
+            {
+                logf("svcReadDebugProcessMemory failed\n");
+                break;
+            }
+
+            if (module.magic == MOD0_MAGIC)
+            {
+                logf("found module at addr 0x%lX\n", mem_info.addr);
+                base = addr;
+                module_count++;
+                if (module_count == 2u)
+                {
+                    break;
+                }
+            }
+        }
+
+        done = mem_info.addr + mem_info.size <= addr;
+        addr = mem_info.addr + mem_info.size;
+    } while (!done);
+    
+    return base;
+}
+
+bool gdb_stub_attach(gdb_stub_t* stub, u64 pid)
+{
+    if (stub->session != INVALID_HANDLE)
+    {
+        return false;
+    }
+
+    logf("attaching to %lu\n", pid);
+    if(R_FAILED(svcDebugActiveProcess(&stub->session, pid)))
+    {
+        logf("svcDebugActiveProcess failed\n");
+        stub->session = INVALID_HANDLE;
+        stub->pid = UINT64_MAX;
+        return false;
+    }
+
+    stub->pid = pid;
+    stub->base_addr = find_main_base(stub);
+
+    return true;
+}
+
+bool gdb_stub_detach(gdb_stub_t* stub, u64 pid)
+{
+    if (stub->session == INVALID_HANDLE ||
+        pid != stub->pid)
+    {
+        return false;
+    }
+
+    svcCloseHandle(stub->session);
+    stub->session = INVALID_HANDLE;
+    stub->pid = UINT64_MAX;
+    stub->base_addr = 0u;
+
+    for (uint32_t i = 0u; i < MAX_THREADS; ++i)
+    {
+        stub->thread[i].tid = UINT64_MAX;
+    }
+
+    return true;
+}
 
 static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* exception)
 {
@@ -484,7 +589,7 @@ static void gdb_stub_exception(gdb_stub_t* stub, const debug_exception_t* except
     {
         if(stub->thread[i].tid != UINT64_MAX)
         {
-            svcGetDebugThreadContext(&stub->thread[i].ctx, stub->session, stub->thread[i].tid, 0xFu);
+            svcGetDebugThreadContext(&stub->thread[i].ctx, stub->session, stub->thread[i].tid, RegisterGroup_All);
         }
     }
 
@@ -528,10 +633,10 @@ static void gdb_stub_attach_thread(gdb_stub_t* stub, u64 thread_id)
         }
 
         stub->thread[thread_idx].tid = thread_id;
-        logf("thread %lu attached\n", thread_id);
+        logf("thread %lu attached (idx=%u)\n", thread_id, thread_idx);
     }
 
-    svcGetDebugThreadContext(&stub->thread[thread_idx].ctx, stub->session, thread_id, 0xFu);
+    svcGetDebugThreadContext(&stub->thread[thread_idx].ctx, stub->session, thread_id, RegisterGroup_All);
 }
 
 static void gdb_stub_exit_thread(gdb_stub_t* stub, u64 thread_id)
@@ -545,7 +650,7 @@ static void gdb_stub_exit_thread(gdb_stub_t* stub, u64 thread_id)
     }
 }
 
-static void gdb_stub_event(gdb_stub_t* stub, const debug_event_t* event)
+static void gdb_stub_event(gdb_stub_t* stub, u64 pid, const debug_event_t* event)
 {
     print_debug_event(&stub->event);
 
@@ -557,6 +662,7 @@ static void gdb_stub_event(gdb_stub_t* stub, const debug_event_t* event)
         gdb_stub_attach_thread(stub, event->thread_id);
         break;
     case DEBUG_EVENT_EXIT_PROCESS:
+        gdb_stub_detach(stub, pid);
         break;
     case DEBUG_EVENT_EXIT_THREAD:
         gdb_stub_exit_thread(stub, event->thread_id);
@@ -578,6 +684,6 @@ void gdb_stub_handle_events(gdb_stub_t* stub)
 
     while(R_SUCCEEDED(svcGetDebugEvent((u8*)&stub->event, stub->session)))
     {
-        gdb_stub_event(stub, &stub->event);
+        gdb_stub_event(stub, stub->pid, &stub->event);
     }
 }

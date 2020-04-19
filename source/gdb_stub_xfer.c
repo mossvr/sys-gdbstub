@@ -184,11 +184,9 @@ static bool xfer_snap_processes(gdb_stub_t* stub)
             continue;
         }
 
-        logf("\t\tdebugging pid %lu\n", pids[i]);
         res = svcDebugActiveProcess(&proc, pids[i]);
         if (R_FAILED(res))
         {
-            logf("failed\n");
             continue;
         }
 
@@ -294,11 +292,6 @@ static bool xfer_snap_threads(gdb_stub_t* stub)
 
     stub->xfer[0] = '\0';
     stub->xfer_len = 0u;
-
-    if (stub->session == INVALID_HANDLE)
-    {
-        return true;
-    }
 
     if (!xfer_printf(stub, "%s", thread_list_header))
     {
