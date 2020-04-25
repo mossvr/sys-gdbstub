@@ -15,7 +15,7 @@
 #include "gdb_stub.h"
 #include "poll_thread.h"
 
-#if 1
+#if 0
 #define logf(fmt, ...) printf("gdb_server: " fmt, ##__VA_ARGS__)
 #else
 #define logf(fmt, ...)

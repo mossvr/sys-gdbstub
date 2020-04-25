@@ -7,6 +7,7 @@
 
 #include "gdb_stub_priv.h"
 
+#define ARMV8_BRK(imm) (0xD4200000 | (((imm) & 0xFFFF) << 5))
 
 typedef struct
 {
@@ -158,102 +159,95 @@ err:
 static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_insert_breakpoint\n");
-    u64 addr;
 
-    switch(packet[1])
+    if (length < 4)
     {
-    case '1':
-        if(sscanf(packet, "Z1,%lX", &addr) == 1)
-        {
-            bool bp_set = false;
-            logf("setting hw breakpoint at address 0x%lX\n", addr);
-            for(u32 i = 0u; i < MAX_HW_BREAKPOINTS; ++i)
-            {
-                if((stub->hw_breakpoints[i].flags & 1u) == 0u)
-                {
-                    stub->hw_breakpoints[i].flags = (0xFu << 5u) | 1u;
-                    stub->hw_breakpoints[i].address = addr;
-
-                    Result res = svcSetHardwareBreakPoint(i,
-                            stub->hw_breakpoints[i].flags,
-                            stub->hw_breakpoints[i].address);
-
-                    if(R_SUCCEEDED(res))
-                    {
-                        bp_set = true;
-                    }
-                    else
-                    {
-                        stub->hw_breakpoints[i].flags = 0u;
-                        stub->hw_breakpoints[i].address = 0u;
-
-                        logf("svcSetHardwareBreakPoint failed (err=%d-%d, id=%u, flags=0x%lX, addr=0x%lX)\n",
-                                R_MODULE(res), R_DESCRIPTION(res),
-                                i,
-                                stub->hw_breakpoints[i].flags,
-                                stub->hw_breakpoints[i].address);
-                    }
-                    break;
-                }
-            }
-
-            if(bp_set)
-            {
-                gdb_stub_send_packet(stub, "OK");
-            }
-            else
-            {
-                gdb_stub_send_error(stub, 0u);
-            }
-
-            return true;
-        }
-        break;
+        gdb_stub_send_error(stub, 0u);
+        return true;
     }
 
-    return false;
+    Result res;
+    bool bp_set = false;
+    char type = packet[1];
+    u64 addr = strtoul(&packet[3], NULL, 16);
+
+    if (type == '0')
+    {
+        for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
+        {
+            sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
+            if (bp->address == UINT64_MAX)
+            {
+                bp->address = addr;
+
+                res = svcReadDebugProcessMemory(&bp->value, stub->session, addr, sizeof(bp->value));
+                if (R_FAILED(res))
+                {
+                    bp->address = UINT64_MAX;
+                    bp->value = 0u;
+                    break;
+                }
+                
+                u32 inst = ARMV8_BRK(0u);
+                res = svcWriteDebugProcessMemory(stub->session, &inst, bp->address, sizeof(inst));
+                if (R_FAILED(res))
+                {
+                    bp->address = UINT64_MAX;
+                    bp->value = 0u;
+                    break;
+                }
+
+                logf("set sw breakpoint (addr=0x%lX, value=0x%X)\n", bp->address, bp->value);
+                bp_set = true;
+                break;
+            }
+        }
+    }
+
+    if(bp_set)
+    {
+        logf("breakpoint set\n");
+        gdb_stub_send_packet(stub, "OK");
+    }
+    else
+    {
+        gdb_stub_send_error(stub, 0u);
+    }
+
+    return true;
 }
 
 static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("gdb_stub_pkt_remove_breakpoint\n");
-    u64 addr;
 
-    switch(packet[1])
+    if (length < 4)
     {
-    case '1':
-        if(sscanf(packet, "z1,%lX", &addr) == 1)
-        {
-            for(u32 i = 0u; i < MAX_HW_BREAKPOINTS; ++i)
-            {
-                if(stub->hw_breakpoints[i].address == addr)
-                {
-                    stub->hw_breakpoints[i].flags = 0u;
-                    stub->hw_breakpoints[i].address = 0u;
-
-                    Result res = svcSetHardwareBreakPoint(i,
-                            stub->hw_breakpoints[i].flags,
-                            stub->hw_breakpoints[i].address);
-
-                    if(R_FAILED(res))
-                    {
-                        logf("svcSetHardwareBreakPoint failed (err=%d-%d, id=%u, flags=0x%lX, addr=0x%lX)\n",
-                                R_MODULE(res), R_DESCRIPTION(res),
-                                i,
-                                stub->hw_breakpoints[i].flags,
-                                stub->hw_breakpoints[i].address);
-                    }
-                    break;
-                }
-            }
-
-            gdb_stub_send_packet(stub, "OK");
-            return true;
-        }
-        break;
+        gdb_stub_send_error(stub, 0u);
+        return true;
     }
 
-    return false;
+    char type = packet[1];
+    u64 addr = strtoul(&packet[3], NULL, 16);
+
+    if (type == '0')
+    {
+        for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
+        {
+            sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
+            if (bp->address == addr)
+            {
+                logf("removed sw breakpoint (addr=0x%lX, value=0x%X)\n", bp->address, bp->value);
+                svcWriteDebugProcessMemory(stub->session, &bp->value, bp->address, sizeof(bp->value));
+                bp->address = UINT64_MAX;
+                bp->value = 0u;
+                break;
+            }
+        }
+    }
+
+    gdb_stub_send_packet(stub, "OK");
+    return true;
 }
 
 static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length)
@@ -396,12 +390,11 @@ static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t
 
 static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_continue\n");
+    logf("%s\n", __FUNCTION__);
 
-    if (stub->session == INVALID_HANDLE ||
-        R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
+    if (stub->session != INVALID_HANDLE)
     {
-        return false;
+        svcContinueDebugEvent(stub->session, 7, NULL, 0u);
     }
 
     stub->exception_type = UINT32_MAX;
@@ -413,7 +406,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
     logf("gdb_stub_pkt_step\n");
 
     if (stub->session == INVALID_HANDLE ||
-        R_FAILED(svcContinueDebugEvent(stub->session, 0x4u, NULL, 0u)))
+        R_FAILED(svcContinueDebugEvent(stub->session, 7, NULL, 0u)))
     {
         return false;
     }

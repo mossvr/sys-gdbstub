@@ -13,11 +13,11 @@ GDB Stub Sysmodule for the Nintendo Switch.
 + Read/write memory
 + Break/continue
 + List threads and switch between them
++ Breakpoints
 
 ## What doesn't work yet
 
 + Write registers
-+ Breakpoints
 + Single stepping
 
 ## Requirements

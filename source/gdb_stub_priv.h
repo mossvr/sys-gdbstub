@@ -13,7 +13,7 @@
 
 #define BUFFER_SIZE 512u
 #define MAX_THREADS 20u
-#define MAX_HW_BREAKPOINTS 4u
+#define MAX_SW_BREAKPOINTS 16u
 
 #if 1
 #define logf(fmt, ...) printf("gdb_stub: " fmt, ##__VA_ARGS__)
@@ -41,6 +41,12 @@ typedef struct
     u64 flags;
 } gdb_stub_breakpoint_t;
 
+typedef struct
+{
+    u64 address;
+    u32 value;
+} sw_breakpoint_t;
+
 struct gdb_stub
 {
     Handle session;
@@ -55,7 +61,7 @@ struct gdb_stub
     u64 base_addr;
     u32 exception_type;
 
-    gdb_stub_breakpoint_t hw_breakpoints[MAX_HW_BREAKPOINTS];
+    sw_breakpoint_t sw_breakpoints[MAX_SW_BREAKPOINTS];
 
     uint8_t mem[512];
     char xfer[8192];

@@ -36,6 +36,11 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
         stub->thread[i].tid = -1;
     }
 
+    for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
+    {
+        stub->sw_breakpoints[i].address = UINT64_MAX;
+    }
+
     return stub;
 }
 
@@ -246,30 +251,19 @@ void gdb_stub_send_error(gdb_stub_t* stub, uint8_t err)
     gdb_stub_packet_end(stub);
 }
 
-static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal, const char* reason)
+static void gdb_stub_send_signal(gdb_stub_t* stub, uint8_t signal)
 {
-    logf("%s (signal=%u, reason=%s, thread=%d)\n", __FUNCTION__, signal, reason, stub->selected_thread);
+    logf("%s (signal=%u, thread=%d)\n", __FUNCTION__, signal, stub->selected_thread);
     gdb_stub_packet_begin(stub);
     gdb_stub_packet_write(stub, "T", 1u);
     gdb_stub_packet_write_hex_le(stub, &signal, sizeof(signal));
     
-    gdb_stub_packet_write_str(stub, "thread:");
     if (stub->selected_thread >= 0)
     {
+        gdb_stub_packet_write_str(stub, "thread:");
         gdb_stub_packet_write_thread_id(stub, stub->pid, stub->thread[stub->selected_thread].tid);
     }
-    else
-    {
-        gdb_stub_packet_write_thread_id(stub, stub->pid, 0);
-    }
-
     gdb_stub_packet_write_str(stub, ";");
-
-    if (*reason != '\0')
-    {
-        gdb_stub_packet_write_str(stub, reason);
-        gdb_stub_packet_write_str(stub, ":;");
-    }
 
     gdb_stub_packet_end(stub);
 }
@@ -288,11 +282,15 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
         else if(c == 0x03u)
         {
             logf("got break request\n");
+            gdb_stub_send_packet(stub, "OK");
             if (stub->session != INVALID_HANDLE)
             {
                 svcBreakDebugProcess(stub->session);
             }
-            gdb_stub_send_packet(stub, "OK");
+            else
+            {
+                gdb_stub_send_stop_reply(stub);
+            }
         }
         break;
     case CMD_STATE_DATA:
@@ -375,11 +373,11 @@ void gdb_stub_input(gdb_stub_t* stub, const char* buffer, size_t length)
 
 void gdb_stub_destroy(gdb_stub_t* stub)
 {
-    if (stub->session != INVALID_HANDLE)
+    if (stub->pid >= 0)
     {
-        svcCloseHandle(stub->session);
-        stub->session = INVALID_HANDLE;
+        gdb_stub_detach(stub, stub->pid);
     }
+    
     memset(stub, 0, sizeof(*stub));
     free(stub);
 }
@@ -481,12 +479,12 @@ void gdb_stub_send_stop_reply(gdb_stub_t* stub)
         return;
     }
 
-    const char* reason = "";
+    uint8_t signal = 0u;
 
     switch(stub->exception_type)
     {
     case DEBUG_EXCEPTION_TRAP:
-        reason = "swbreak";
+        signal = 5u;
         break;
     case DEBUG_EXCEPTION_INSTRUCTION_ABORT:
         break;
@@ -497,11 +495,12 @@ void gdb_stub_send_stop_reply(gdb_stub_t* stub)
     case DEBUG_EXCEPTION_DEBUGGER_ATTACHED:
         break;
     case DEBUG_EXCEPTION_BREAKPOINT:
-        reason = "hwbreak";
+        signal = 5u;
         break;
     case DEBUG_EXCEPTION_USER_BREAK:
         break;
     case DEBUG_EXCEPTION_DEBUGGER_BREAK:
+        signal = 2u;
         break;
     case DEBUG_EXCEPTION_BAD_SVC_ID:
         break;
@@ -509,7 +508,7 @@ void gdb_stub_send_stop_reply(gdb_stub_t* stub)
         break;
     }
 
-    gdb_stub_send_signal(stub, 0u, reason);
+    gdb_stub_send_signal(stub, signal);
 }
 
 static uint64_t find_main_base(gdb_stub_t* stub)
@@ -598,6 +597,18 @@ bool gdb_stub_detach(gdb_stub_t* stub, int pid)
         pid != stub->pid)
     {
         return false;
+    }
+
+    // remove software breakpoints
+    for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
+    {
+        sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
+        if (bp->address != UINT64_MAX)
+        {
+            svcWriteDebugProcessMemory(stub->session, &bp->value, bp->address, sizeof(bp->value));
+            bp->address = UINT64_MAX;
+            bp->value = 0u;
+        }
     }
 
     svcCloseHandle(stub->session);
@@ -720,6 +731,7 @@ static void gdb_stub_event(gdb_stub_t* stub, int pid, const debug_event_t* event
         break;
     case DEBUG_EVENT_EXIT_PROCESS:
         gdb_stub_detach(stub, pid);
+        gdb_stub_send_stop_reply(stub);
         break;
     case DEBUG_EVENT_EXIT_THREAD:
         gdb_stub_exit_thread(stub, (int)event->thread_id);
