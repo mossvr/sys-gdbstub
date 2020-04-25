@@ -1,5 +1,5 @@
 {
-	"name":	"sysmodule",
+	"name":	"sys-gdbstub",
 	"title_id":	"0x4200000000474442",
 	"title_id_range_min":	"0x4200000000474442",
 	"title_id_range_max":	"0x4200000000474442",
@@ -161,7 +161,7 @@
 			"value":	"0x0030"
 		}, {
 			"type":	"handle_table_size",
-			"value":	1023
+			"value":	256
 		}, {
 			"type":	"debug_flags",
 			"value":	{
