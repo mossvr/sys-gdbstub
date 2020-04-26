@@ -85,7 +85,7 @@ static bool gdb_stub_query_supported(gdb_stub_t* stub, char* packet, size_t leng
     size_t buf_len = sizeof(stub->mem);
 
     gdb_stub_packet_begin(stub);
-    gdb_stub_packet_write_str(stub, "multiprocess+;hwbreak+;qXfer:osdata:read+;qXfer:threads:read+");
+    gdb_stub_packet_write_str(stub, "multiprocess+;qXfer:osdata:read+;qXfer:threads:read+");
     gdb_stub_packet_write_str(stub, ";qXfer:libraries:read+");
 
     snprintf(buf, buf_len, ";PacketSize=%x", BUFFER_SIZE - 1u);
