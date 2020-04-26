@@ -642,13 +642,7 @@ bool gdb_stub_detach(gdb_stub_t* stub, int pid)
     // remove software breakpoints
     for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
     {
-        sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
-        if (bp->address != UINT64_MAX)
-        {
-            svcWriteDebugProcessMemory(stub->session, &bp->value, bp->address, sizeof(bp->value));
-            bp->address = UINT64_MAX;
-            bp->value = 0u;
-        }
+        stub->sw_breakpoints[i].address = UINT64_MAX;
     }
 
     // remove modules
@@ -671,9 +665,37 @@ bool gdb_stub_detach(gdb_stub_t* stub, int pid)
     return true;
 }
 
+void gdb_stub_enable_breakpoints(gdb_stub_t* stub)
+{
+    for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
+    {
+        sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
+        if (bp->address != UINT64_MAX)
+        {
+            svcReadDebugProcessMemory(&bp->value, stub->session, bp->address, sizeof(bp->value));
+
+            uint32_t inst = ARMV8_BRK(0u);
+            svcWriteDebugProcessMemory(stub->session, &inst, bp->address, sizeof(inst));
+        }
+    }
+}
+
+void gdb_stub_disable_breakpoints(gdb_stub_t* stub)
+{
+    for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
+    {
+        sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
+        if (bp->address != UINT64_MAX)
+        {
+            svcWriteDebugProcessMemory(stub->session, &bp->value, bp->address, sizeof(bp->value));
+        }
+    }
+}
+
 static void gdb_stub_exception(gdb_stub_t* stub, int tid, const debug_exception_t* exception)
 {
     stub->exception_type = exception->type;
+    gdb_stub_disable_breakpoints(stub);
 
     int idx = gdb_stub_thread_id_to_index(stub, tid);
     if (idx < MAX_THREADS)

@@ -7,8 +7,6 @@
 
 #include "gdb_stub_priv.h"
 
-#define ARMV8_BRK(imm) (0xD4200000 | (((imm) & 0xFFFF) << 5))
-
 typedef struct
 {
     const char* type;
@@ -158,7 +156,7 @@ err:
 
 static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_insert_breakpoint\n");
+    logf("%s\n", __FUNCTION__);
 
     if (length < 4)
     {
@@ -166,7 +164,6 @@ static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
         return true;
     }
 
-    Result res;
     bool bp_set = false;
     char type = packet[1];
     u64 addr = strtoul(&packet[3], NULL, 16);
@@ -179,25 +176,6 @@ static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
             if (bp->address == UINT64_MAX)
             {
                 bp->address = addr;
-
-                res = svcReadDebugProcessMemory(&bp->value, stub->session, addr, sizeof(bp->value));
-                if (R_FAILED(res))
-                {
-                    bp->address = UINT64_MAX;
-                    bp->value = 0u;
-                    break;
-                }
-                
-                u32 inst = ARMV8_BRK(0u);
-                res = svcWriteDebugProcessMemory(stub->session, &inst, bp->address, sizeof(inst));
-                if (R_FAILED(res))
-                {
-                    bp->address = UINT64_MAX;
-                    bp->value = 0u;
-                    break;
-                }
-
-                logf("set sw breakpoint (addr=0x%lX, value=0x%X)\n", bp->address, bp->value);
                 bp_set = true;
                 break;
             }
@@ -219,7 +197,7 @@ static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
 
 static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_remove_breakpoint\n");
+    logf("%s\n", __FUNCTION__);
 
     if (length < 4)
     {
@@ -237,8 +215,6 @@ static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_
             sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
             if (bp->address == addr)
             {
-                logf("removed sw breakpoint (addr=0x%lX, value=0x%X)\n", bp->address, bp->value);
-                svcWriteDebugProcessMemory(stub->session, &bp->value, bp->address, sizeof(bp->value));
                 bp->address = UINT64_MAX;
                 bp->value = 0u;
                 break;
@@ -252,7 +228,7 @@ static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_
 
 static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_read_registers\n");
+    logf("%s\n", __FUNCTION__);
 
     int idx = stub->selected_thread;
     if (idx < 0 || idx >= MAX_THREADS)
@@ -269,28 +245,28 @@ static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t l
 
 static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_write_registers\n");
+    logf("%s\n", __FUNCTION__);
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
 static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_read_register\n");
+    logf("%s\n", __FUNCTION__);
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
 static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_write_register\n");
+    logf("%s\n", __FUNCTION__);
     logf("%s not implemented\n", __FUNCTION__);
     return false;
 }
 
 static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_read_memory\n");
+    logf("%s\n", __FUNCTION__);
 
     Result res;
     u64 addr, size;
@@ -394,6 +370,7 @@ static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
 
     if (stub->session != INVALID_HANDLE)
     {
+        gdb_stub_enable_breakpoints(stub);
         svcContinueDebugEvent(stub->session, 7, NULL, 0u);
     }
 
@@ -403,12 +380,12 @@ static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
 
 static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_step\n");
+    logf("%s\n", __FUNCTION__);
 
-    if (stub->session == INVALID_HANDLE ||
-        R_FAILED(svcContinueDebugEvent(stub->session, 7, NULL, 0u)))
+    if (stub->session != INVALID_HANDLE)
     {
-        return false;
+        gdb_stub_enable_breakpoints(stub);
+        svcContinueDebugEvent(stub->session, 7, NULL, 0u);
     }
 
     return true;
@@ -416,7 +393,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 
 static bool gdb_stub_pkt_get_halt_reason(gdb_stub_t* stub, char* packet, size_t length)
 {
-    logf("gdb_stub_pkt_get_halt_reason\n");
+    logf("%s\n", __FUNCTION__);
     gdb_stub_send_stop_reply(stub);
     return true;
 }

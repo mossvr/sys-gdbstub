@@ -16,6 +16,9 @@
 #define MAX_SW_BREAKPOINTS 16u
 #define MAX_MODULES 16u
 
+#define ARMV8_BRK(imm) (0xD4200000 | (((imm) & 0xFFFF) << 5))
+
+
 #if 1
 #define logf(fmt, ...) printf("gdb_stub: " fmt, ##__VA_ARGS__)
 #else
@@ -113,5 +116,7 @@ bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length);
 
 bool gdb_stub_attach(gdb_stub_t* stub, int pid);
 bool gdb_stub_detach(gdb_stub_t* stub, int pid);
+void gdb_stub_enable_breakpoints(gdb_stub_t* stub);
+void gdb_stub_disable_breakpoints(gdb_stub_t* stub);
 
 #endif /* GDB_STUB_PRIV_H_ */
