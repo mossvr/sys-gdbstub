@@ -229,6 +229,7 @@ static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_
 static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("%s\n", __FUNCTION__);
+    ThreadContext* ctx = NULL;
 
     int idx = stub->selected_thread;
     if (idx < 0 || idx >= MAX_THREADS)
@@ -236,8 +237,18 @@ static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t l
         idx = gdb_stub_first_thread_index(stub);
     }
 
+    ctx = &stub->thread[idx].ctx;
+
     gdb_stub_packet_begin(stub);
-    gdb_stub_packet_write_hex_le(stub, &stub->thread[idx].ctx, 788u);
+    gdb_stub_packet_write_hex_le(stub, ctx->cpu_gprs, sizeof(ctx->cpu_gprs));
+    gdb_stub_packet_write_hex_le(stub, &ctx->fp, sizeof(ctx->fp));
+    gdb_stub_packet_write_hex_le(stub, &ctx->lr, sizeof(ctx->lr));
+    gdb_stub_packet_write_hex_le(stub, &ctx->sp, sizeof(ctx->sp));
+    gdb_stub_packet_write_hex_le(stub, &ctx->pc, sizeof(ctx->pc));
+    gdb_stub_packet_write_hex_le(stub, &ctx->psr, sizeof(ctx->psr));
+    gdb_stub_packet_write_hex_le(stub, ctx->fpu_gprs, sizeof(ctx->fpu_gprs));
+    gdb_stub_packet_write_hex_le(stub, &ctx->fpsr, sizeof(ctx->fpsr));
+    gdb_stub_packet_write_hex_le(stub, &ctx->fpcr, sizeof(ctx->fpcr));
     gdb_stub_packet_end(stub);
 
     return true;
