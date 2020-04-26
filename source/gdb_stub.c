@@ -49,41 +49,49 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     return stub;
 }
 
-static uint8_t gdb_stub_decode_hex_char(char c)
+static char* gdb_stub_decode_hex_char(char* str, uint8_t* out)
 {
-    if ((c >= 'a') && (c <= 'f'))
-        return (c - 'a' + 10);
-    if ((c >= '0') && (c <= '9'))
-        return (c - '0');
-    if ((c >= 'A') && (c <= 'F'))
-        return (c - 'A' + 10);
+    char c = *str;
 
-    return UINT8_MAX;
+    if ((c >= 'a') && (c <= 'f'))
+    {
+        *out = (*out & ~0xF) | (c - 'a' + 10);
+        str++;
+    }
+    else if ((c >= '0') && (c <= '9'))
+    {
+        *out = (*out & ~0xF) | (c - '0');
+        str++;
+    }
+    else if ((c >= 'A') && (c <= 'F'))
+    {
+        *out = (*out & ~0xF) | (c - 'A' + 10);
+        str++;
+    }
+
+    return str;
 }
 
-int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_t output_len)
+static char* gdb_stub_decode_hex_byte(char* str, uint8_t* out)
 {
-    int dec_len = 0;
+    str = gdb_stub_decode_hex_char(str, out);
+    *out <<= 4u;
+    str = gdb_stub_decode_hex_char(str, out);
+    return str;
+}
 
-    if((input_len & 1) != 0u || output_len < input_len / 2u)
+char* gdb_stub_decode_hex(char* str, void* buffer, size_t len)
+{
+    uint8_t* u8 = buffer;
+
+    while (len != 0u)
     {
-        return -1;
+        str = gdb_stub_decode_hex_byte(str, u8);
+        u8++;
+        len--;
     }
 
-    for(size_t i = 0u; i < input_len / 2u; ++i)
-    {
-        uint8_t high = gdb_stub_decode_hex_char(input[i*2]);
-        uint8_t low = gdb_stub_decode_hex_char(input[(i*2)+1]);
-        if(high > 0xFu || low > 0xFu)
-        {
-            return -1;
-        }
-
-        ((uint8_t*)output)[i] = (high << 4u) | low;
-        dec_len++;
-    }
-
-    return dec_len;
+    return str;
 }
 
 bool gdb_stub_parse_thread_id(const char* input, int* o_pid, int* o_tid)
@@ -313,7 +321,7 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
             stub->rx.state = CMD_STATE_ESC;
             stub->rx.checksum += (uint8_t)c;
         }
-        else if(stub->rx.pos < BUFFER_SIZE-1)
+        else if(stub->rx.pos < sizeof(stub->rx.packet)-1u)
         {
             stub->rx.packet[stub->rx.pos++] = c;
             stub->rx.checksum += (uint8_t)c;
@@ -323,10 +331,11 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
             // buffer too small
             stub->rx.state = CMD_STATE_START;
             gdb_stub_send_error(stub, 0);
+            logf("packet too large\n");
         }
         break;
     case CMD_STATE_ESC:
-        if(stub->rx.pos < BUFFER_SIZE-1)
+        if(stub->rx.pos < sizeof(stub->rx.packet)-1u)
         {
             stub->rx.checksum += (uint8_t)c;
             stub->rx.packet[stub->rx.pos++] = c ^ 0x20;
@@ -337,6 +346,7 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
             // buffer too small
             stub->rx.state = CMD_STATE_START;
             gdb_stub_send_error(stub, 0);
+            logf("packet too large\n");
         }
         break;
     case CMD_STATE_CHECKSUM:
@@ -344,9 +354,10 @@ static inline void gdb_stub_insert_char(gdb_stub_t* stub, char c)
 
         if(stub->rx.checksum_pos == 2u)
         {
-            uint8_t checksum;
-            if(gdb_stub_decode_hex(stub->rx.checksum_buf, 2u, &checksum, sizeof(checksum)) == 1
-                    && checksum == stub->rx.checksum)
+            uint8_t checksum = 0u;
+            gdb_stub_decode_hex(stub->rx.checksum_buf, &checksum, sizeof(checksum));
+
+            if (checksum == stub->rx.checksum)
             {
                 // null terminate the packet
                 stub->rx.packet[stub->rx.pos] = '\0';

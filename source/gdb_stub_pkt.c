@@ -20,8 +20,6 @@ static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
 static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length);
-static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_write_memory(gdb_stub_t* stub, char* packet, size_t length);
 static bool gdb_stub_pkt_write_memory_bin(gdb_stub_t* stub, char* packet, size_t length);
@@ -41,8 +39,6 @@ static const gdb_pkt_handler_t pkt_handler[] =
         { "z", gdb_stub_pkt_remove_breakpoint },
         { "g", gdb_stub_pkt_read_registers },
         { "G", gdb_stub_pkt_write_registers },
-        { "p", gdb_stub_pkt_read_register },
-        { "P", gdb_stub_pkt_write_register },
         { "m", gdb_stub_pkt_read_memory },
         { "M", gdb_stub_pkt_write_memory },
         { "X", gdb_stub_pkt_write_memory_bin },
@@ -257,22 +253,36 @@ static bool gdb_stub_pkt_read_registers(gdb_stub_t* stub, char* packet, size_t l
 static bool gdb_stub_pkt_write_registers(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("%s\n", __FUNCTION__);
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
 
-static bool gdb_stub_pkt_read_register(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("%s\n", __FUNCTION__);
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
-}
+    if (stub->session != INVALID_HANDLE)
+    {
+        ThreadContext* ctx = NULL;
 
-static bool gdb_stub_pkt_write_register(gdb_stub_t* stub, char* packet, size_t length)
-{
-    logf("%s\n", __FUNCTION__);
-    logf("%s not implemented\n", __FUNCTION__);
-    return false;
+        int idx = stub->selected_thread;
+        if (idx < 0 || idx >= MAX_THREADS)
+        {
+            idx = gdb_stub_first_thread_index(stub);
+        }
+
+        ctx = &stub->thread[idx].ctx;
+
+        packet++;
+
+        packet = gdb_stub_decode_hex(packet, ctx->cpu_gprs, sizeof(ctx->cpu_gprs));
+        packet = gdb_stub_decode_hex(packet, &ctx->fp, sizeof(ctx->fp));
+        packet = gdb_stub_decode_hex(packet, &ctx->lr, sizeof(ctx->lr));
+        packet = gdb_stub_decode_hex(packet, &ctx->sp, sizeof(ctx->sp));
+        packet = gdb_stub_decode_hex(packet, &ctx->pc, sizeof(ctx->pc));
+        packet = gdb_stub_decode_hex(packet, &ctx->psr, sizeof(ctx->psr));
+        packet = gdb_stub_decode_hex(packet, ctx->fpu_gprs, sizeof(ctx->fpu_gprs));
+        packet = gdb_stub_decode_hex(packet, &ctx->fpsr, sizeof(ctx->fpsr));
+        packet = gdb_stub_decode_hex(packet, &ctx->fpcr, sizeof(ctx->fpcr));
+
+        svcSetDebugThreadContext(stub->session, stub->thread[idx].tid, ctx, RegisterGroup_All);
+    }
+
+    gdb_stub_send_packet(stub, "OK");
+    return true;
 }
 
 static bool gdb_stub_pkt_read_memory(gdb_stub_t* stub, char* packet, size_t length)

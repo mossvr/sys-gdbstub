@@ -11,7 +11,6 @@
 #include "gdb_stub.h"
 #include "svc_dbg.h"
 
-#define BUFFER_SIZE 512u
 #define MAX_THREADS 20u
 #define MAX_SW_BREAKPOINTS 16u
 #define MAX_MODULES 16u
@@ -74,7 +73,7 @@ struct gdb_stub
 
     struct
     {
-        char packet[BUFFER_SIZE];
+        char packet[2048];
         cmd_state_t state;
         size_t pos;
         char checksum_buf[2];
@@ -86,12 +85,12 @@ struct gdb_stub
     {
         cmd_state_t state;
         uint8_t checksum;
-        char cache[BUFFER_SIZE];
+        char cache[256];
         size_t pos;
     } tx;
 };
 
-int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_t output_len);
+char* gdb_stub_decode_hex(char* str, void* buffer, size_t len);
 bool gdb_stub_parse_thread_id(const char* input, int* o_pid, int* o_tid);
 int gdb_stub_thread_id_to_index(gdb_stub_t* stub, int tid);
 int gdb_stub_first_thread_index(gdb_stub_t* stub);

@@ -17,7 +17,6 @@ GDB Stub Sysmodule for the Nintendo Switch.
 
 ## What doesn't work yet
 
-+ Write registers
 + Single stepping
 
 ## Requirements
