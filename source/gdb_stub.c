@@ -148,7 +148,7 @@ void gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
         }
 
         // escape reserved values
-        if(c == '$' || c == '#' || c == '}')
+        if(c == '$' || c == '#' || c == '}' || c == '*')
         {
             stub->tx.cache[stub->tx.pos++] = '}';
             stub->tx.checksum += '}';
