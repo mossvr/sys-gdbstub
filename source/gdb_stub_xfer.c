@@ -24,11 +24,13 @@ typedef struct
 
 static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req);
 static bool gdb_stub_xfer_threads(gdb_stub_t* stub, gdb_xfer_req_t* req);
+static bool gdb_stub_xfer_libs(gdb_stub_t* stub, gdb_xfer_req_t* req);
 
 static const gdb_xfer_handler_t xfer_handler[] =
 {
     { "osdata", gdb_stub_xfer_osdata },
     { "threads", gdb_stub_xfer_threads },
+    { "libraries", gdb_stub_xfer_libs },
 };
 
 bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length)
@@ -324,10 +326,66 @@ err:
 
 static bool gdb_stub_xfer_threads(gdb_stub_t* stub, gdb_xfer_req_t* req)
 {
+    logf("%s\n", __FUNCTION__);
+
     if (req->offset == 0u)
     {
         if (*req->annex != 0u ||
             !xfer_snap_threads(stub))
+        {
+            gdb_stub_send_error(stub, 0u);
+            return true;
+        }
+    }
+
+    return gdb_stub_send_xfer(stub, req->offset, req->length);
+}
+
+static bool xfer_snap_libs(gdb_stub_t* stub)
+{
+    const char* header = "<library-list>";
+    const char* entry = "<library name=\"%d\"><segment address=\"0x%lX\" /></library>";
+    const char* footer = "</library-list>";
+
+    stub->xfer[0] = '\0';
+    stub->xfer_len = 0u;
+
+    if (!xfer_printf(stub, header))
+    {
+        goto err;
+    }
+
+    for (int i = 0; i < MAX_MODULES; ++i)
+    {
+        if (stub->modules[i] != UINT64_MAX)
+        {
+            if (!xfer_printf(stub, entry, i, stub->modules[i]))
+            {
+                goto err;
+            }
+        }
+    }
+
+    if (!xfer_printf(stub, footer))
+    {
+        goto err;
+    }
+
+    return true;
+err:
+    stub->xfer[0] = '\0';
+    stub->xfer_len = 0u;
+    return false;
+}
+
+static bool gdb_stub_xfer_libs(gdb_stub_t* stub, gdb_xfer_req_t* req)
+{
+    logf("%s\n", __FUNCTION__);
+    
+    if (req->offset == 0u)
+    {
+        if (*req->annex != 0u ||
+            !xfer_snap_libs(stub))
         {
             gdb_stub_send_error(stub, 0u);
             return true;

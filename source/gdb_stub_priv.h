@@ -14,6 +14,7 @@
 #define BUFFER_SIZE 512u
 #define MAX_THREADS 20u
 #define MAX_SW_BREAKPOINTS 16u
+#define MAX_MODULES 16u
 
 #if 1
 #define logf(fmt, ...) printf("gdb_stub: " fmt, ##__VA_ARGS__)
@@ -62,6 +63,7 @@ struct gdb_stub
     u32 exception_type;
 
     sw_breakpoint_t sw_breakpoints[MAX_SW_BREAKPOINTS];
+    uint64_t modules[MAX_MODULES];
 
     uint8_t mem[512];
     char xfer[8192];
@@ -90,6 +92,7 @@ int gdb_stub_decode_hex(const char* input, size_t input_len, void* output, size_
 bool gdb_stub_parse_thread_id(const char* input, int* o_pid, int* o_tid);
 int gdb_stub_thread_id_to_index(gdb_stub_t* stub, int tid);
 int gdb_stub_first_thread_index(gdb_stub_t* stub);
+bool gdb_stub_read_module_header(gdb_stub_t* stub, uint64_t addr, module_header_t* header);
 
 void gdb_stub_putc(gdb_stub_t* stub, char c);
 void gdb_stub_send_packet(gdb_stub_t* stub, const char* packet);

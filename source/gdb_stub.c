@@ -41,6 +41,11 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
         stub->sw_breakpoints[i].address = UINT64_MAX;
     }
 
+    for (int i = 0; i < MAX_MODULES; ++i)
+    {
+        stub->modules[i] = UINT64_MAX;
+    }
+
     return stub;
 }
 
@@ -511,15 +516,44 @@ void gdb_stub_send_stop_reply(gdb_stub_t* stub)
     gdb_stub_send_signal(stub, signal);
 }
 
-static uint64_t find_main_base(gdb_stub_t* stub)
+bool gdb_stub_read_module_header(gdb_stub_t* stub, uint64_t addr, module_header_t* header)
+{
+    Result res;
+    uint32_t offset;
+
+    if (stub->session == INVALID_HANDLE)
+    {
+        return false;
+    }
+
+    res = svcReadDebugProcessMemory(&offset, stub->session, addr + 4u, sizeof(offset));
+    if (R_FAILED(res))
+    {
+        return false;
+    }
+
+    res = svcReadDebugProcessMemory(header, stub->session, addr + offset, sizeof(*header));
+    if (R_FAILED(res))
+    {
+        return false;
+    }
+
+    if (header->magic == MOD0_MAGIC)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+static void find_modules(gdb_stub_t* stub)
 {
     Result res;
     MemoryInfo mem_info;
     uint32_t dummy;
     uint64_t addr = 0u;
     bool done = false;
-    uint32_t module_count = 0u;
-    uint64_t base = 0u;
+    size_t i = 0u;
 
     do
     {
@@ -533,29 +567,13 @@ static uint64_t find_main_base(gdb_stub_t* stub)
         if (mem_info.type == MemType_CodeStatic &&
             mem_info.perm == Perm_Rx)
         {
-            uint32_t offset;
             module_header_t module;
 
-            res = svcReadDebugProcessMemory(&offset, stub->session, mem_info.addr + 4u, sizeof(offset));
-            if (R_FAILED(res))
-            {
-                logf("svcReadDebugProcessMemory failed\n");
-                break;
-            }
-
-            res = svcReadDebugProcessMemory(&module, stub->session, mem_info.addr + offset, sizeof(module));
-            if (R_FAILED(res))
-            {
-                logf("svcReadDebugProcessMemory failed\n");
-                break;
-            }
-
-            if (module.magic == MOD0_MAGIC)
+            if (gdb_stub_read_module_header(stub, mem_info.addr, &module))
             {
                 logf("found module at addr 0x%lX\n", mem_info.addr);
-                base = addr;
-                module_count++;
-                if (module_count == 2u)
+                stub->modules[i++] = mem_info.addr;
+                if (i == MAX_MODULES)
                 {
                     break;
                 }
@@ -565,7 +583,28 @@ static uint64_t find_main_base(gdb_stub_t* stub)
         done = mem_info.addr + mem_info.size <= addr;
         addr = mem_info.addr + mem_info.size;
     } while (!done);
-    
+}
+
+static uint64_t find_main_base(gdb_stub_t* stub)
+{
+    uint32_t module_count = 0u;
+    uint64_t base = 0u;
+
+    for (int i = 0; i < MAX_MODULES; ++i)
+    {
+        if (stub->modules[i] != UINT64_MAX)
+        {
+            module_count++;
+            base = stub->modules[i];
+
+            // main is first if it's alone, otherwise it's second after rtld
+            if (module_count == 2u)
+            {
+                break;
+            }
+        }
+    }
+
     return base;
 }
 
@@ -586,6 +625,7 @@ bool gdb_stub_attach(gdb_stub_t* stub, int pid)
     }
 
     stub->pid = pid;
+    find_modules(stub);
     stub->base_addr = find_main_base(stub);
 
     return true;
@@ -609,6 +649,12 @@ bool gdb_stub_detach(gdb_stub_t* stub, int pid)
             bp->address = UINT64_MAX;
             bp->value = 0u;
         }
+    }
+
+    // remove modules
+    for (int i = 0; i < MAX_MODULES; ++i)
+    {
+        stub->modules[i] = UINT64_MAX;
     }
 
     svcCloseHandle(stub->session);
