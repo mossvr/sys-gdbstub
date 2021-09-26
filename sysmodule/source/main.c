@@ -7,6 +7,8 @@
 
 #include "gdb_main.h"
 
+#define GDB_PORT 10000
+
 #if 0
 #define logf(fmt, ...) printf("main: " fmt, ##__VA_ARGS__)
 #else
@@ -83,7 +85,7 @@ int main(int argc, char* argv[])
     logf("sys-gdbstub started\n");
     while (!quit)
     {
-        if (gdb_main_init() != 0)
+        if (gdb_main_init(GDB_PORT) != 0)
         {
             break;
         }

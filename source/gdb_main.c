@@ -14,11 +14,11 @@
 
 static gdb_server_t* server;
 
-int gdb_main_init(void)
+int gdb_main_init(int port)
 {
     logf("%s\n", __FUNCTION__);
 
-    server = gdb_server_create(10000);
+    server = gdb_server_create(port);
     if(server == NULL)
     {
         return -1;

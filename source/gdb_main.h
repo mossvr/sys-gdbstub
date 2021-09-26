@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-int gdb_main_init(void);
+int gdb_main_init(int port);
 int gdb_main_run(uint64_t timeout);
 void gdb_main_exit(void);
 
