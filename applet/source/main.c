@@ -70,6 +70,12 @@ int main(int argc, char* argv[])
     nxlink_fd = nxlinkStdio();
 #endif
 
+    consoleInit(NULL);
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+
+    PadState pad;
+    padInitializeDefault(&pad);
+
     bool quit = false;
     logf("sys-gdbstub started\n");
     while (!quit)
@@ -86,12 +92,16 @@ int main(int argc, char* argv[])
                 break;
             }
 
-            hidScanInput();
-            if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS)
+            padUpdate(&pad);
+            u64 kDown = padGetButtonsDown(&pad);
+
+            if (kDown & HidNpadButton_Plus)
             {
                 quit = true;
                 break;
             }
+
+            consoleUpdate(NULL);
         }
 
         gdb_main_exit();
@@ -103,6 +113,7 @@ int main(int argc, char* argv[])
     {
         close(nxlink_fd);
     }
+    consoleExit(NULL);
     socketExit();
     return 0;
 }
