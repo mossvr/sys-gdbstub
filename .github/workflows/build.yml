@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: 
+      - master
+  create:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: ubuntu-18.04
+    runs-on: ubuntu-18.04
+    container: devkitpro/devkita64:20210726
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Build
+        run: |
+          make -j2
+          make dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v2
+        with:
+          name: sys-gdbstub
+          path: out/*
+          
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: sys-gdbstub.zip
