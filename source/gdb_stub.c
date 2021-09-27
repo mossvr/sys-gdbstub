@@ -134,7 +134,7 @@ void gdb_stub_packet_begin(gdb_stub_t* stub)
     stub->tx.checksum = 0u;
     stub->tx.pos = 0u;
 
-    stub->tx.cache[stub->tx.pos++] = '$';
+    stub->tx.buffer[stub->tx.pos++] = '$';
 }
 
 void gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
@@ -148,22 +148,22 @@ void gdb_stub_packet_write(gdb_stub_t* stub, const char* data, size_t len)
     {
         char c = *data;
 
-        // flush the tx cache if it's full
-        if(stub->tx.pos + 2u > sizeof(stub->tx.cache))
+        // flush the tx buffer if it's full
+        if(stub->tx.pos + 2u > sizeof(stub->tx.buffer))
         {
-            stub->output(stub, stub->tx.cache, stub->tx.pos, stub->arg);
+            stub->output(stub, stub->tx.buffer, stub->tx.pos, stub->arg);
             stub->tx.pos = 0u;
         }
 
         // escape reserved values
         if(c == '$' || c == '#' || c == '}' || c == '*')
         {
-            stub->tx.cache[stub->tx.pos++] = '}';
+            stub->tx.buffer[stub->tx.pos++] = '}';
             stub->tx.checksum += '}';
             c ^= 0x20;
         }
 
-        stub->tx.cache[stub->tx.pos++] = c;
+        stub->tx.buffer[stub->tx.pos++] = c;
         stub->tx.checksum += c;
         data++;
         len--;
@@ -230,19 +230,19 @@ void gdb_stub_packet_end(gdb_stub_t* stub)
         return;
     }
 
-    // flush the tx cache if it's full
-    if(stub->tx.pos + 3u > sizeof(stub->tx.cache))
+    // flush the tx buffer if it's full
+    if(stub->tx.pos + 3u > sizeof(stub->tx.buffer))
     {
-        stub->output(stub, stub->tx.cache, stub->tx.pos, stub->arg);
+        stub->output(stub, stub->tx.buffer, stub->tx.pos, stub->arg);
         stub->tx.pos = 0u;
     }
 
-    stub->tx.cache[stub->tx.pos++] = '#';
-    stub->tx.cache[stub->tx.pos++] = hex_chars[(stub->tx.checksum >> 4u) & 0xFu];
-    stub->tx.cache[stub->tx.pos++] = hex_chars[stub->tx.checksum & 0xFu];
+    stub->tx.buffer[stub->tx.pos++] = '#';
+    stub->tx.buffer[stub->tx.pos++] = hex_chars[(stub->tx.checksum >> 4u) & 0xFu];
+    stub->tx.buffer[stub->tx.pos++] = hex_chars[stub->tx.checksum & 0xFu];
 
     // send the rest of the packet
-    stub->output(stub, stub->tx.cache, stub->tx.pos, stub->arg);
+    stub->output(stub, stub->tx.buffer, stub->tx.pos, stub->arg);
     stub->tx.pos = 0u;
     stub->tx.state = CMD_STATE_START;
 

@@ -85,7 +85,7 @@ struct gdb_stub
     {
         cmd_state_t state;
         uint8_t checksum;
-        char cache[256];
+        char buffer[256];
         size_t pos;
     } tx;
 };
