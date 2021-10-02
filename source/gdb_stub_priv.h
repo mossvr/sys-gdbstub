@@ -112,6 +112,7 @@ void gdb_stub_packet_end(gdb_stub_t* stub);
 void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length);
 bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length);
 bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length);
+bool gdb_stub_query_rcmd(gdb_stub_t* stub, char* packet, size_t length);
 
 bool gdb_stub_attach(gdb_stub_t* stub, int pid);
 bool gdb_stub_detach(gdb_stub_t* stub, int pid);

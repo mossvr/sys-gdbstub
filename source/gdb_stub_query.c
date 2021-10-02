@@ -24,6 +24,7 @@ static const gdb_query_handler_t query_handler[] =
         { "Supported", gdb_stub_query_supported },
         { "Attached", gdb_stub_query_attached },
         { "Xfer", gdb_stub_query_xfer },
+        { "Rcmd", gdb_stub_query_rcmd },
 };
 
 
