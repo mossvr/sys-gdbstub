@@ -575,7 +575,8 @@ static void find_modules(gdb_stub_t* stub)
             break;
         }
 
-        if (mem_info.type == MemType_CodeStatic &&
+        if ((mem_info.type == MemType_CodeStatic ||
+                mem_info.type == MemType_ModuleCodeStatic) &&
             mem_info.perm == Perm_Rx)
         {
             module_header_t module;
