@@ -341,10 +341,51 @@ static bool gdb_stub_xfer_threads(gdb_stub_t* stub, gdb_xfer_req_t* req)
     return gdb_stub_send_xfer(stub, req->offset, req->length);
 }
 
+static s32 get_modules(gdb_stub_t* stub, LoaderModuleInfo *modules, size_t max)
+{
+    s32 module_total = 0;
+
+    if (stub->pid == -1)
+        return 0;
+
+    s32 module_count = 0;
+    Result res = ldrDmntGetProcessModuleInfo((u64)stub->pid, modules, max, &module_count);
+    if (R_SUCCEEDED(res) && module_count > 0)
+    {
+        module_total += module_count;
+    }
+
+    return module_total;
+}
+
+static char* encode_hex(char* buffer, size_t max, const void* data, size_t len)
+{
+    static const char hex_chars[] = "0123456789abcdef";
+    char* dst_pos = buffer;
+    const u8* src_pos = data;
+
+    if (len * 2u >= max)
+    {
+        len = (max - 1u) / 2u;
+    }
+
+    while (len != 0u)
+    {
+        *dst_pos++ = hex_chars[(*src_pos >> 4u) & 0xFu];
+        *dst_pos++ = hex_chars[*src_pos & 0xFu];
+        src_pos++;
+        len--;
+    }
+
+    *dst_pos = '\0';
+
+    return dst_pos;
+}
+
 static bool xfer_snap_libs(gdb_stub_t* stub)
 {
     const char* header = "<library-list>";
-    const char* entry = "<library name=\"%d\"><segment address=\"0x%lX\" /></library>";
+    const char* entry = "<library name=\"%s.so\"><segment address=\"0x%lX\" /></library>";
     const char* footer = "</library-list>";
 
     stub->xfer[0] = '\0';
@@ -355,14 +396,16 @@ static bool xfer_snap_libs(gdb_stub_t* stub)
         goto err;
     }
 
-    for (int i = 0; i < MAX_MODULES; ++i)
+    char build_id_str[65];
+    LoaderModuleInfo modules[16];
+    s32 module_count = get_modules(stub, modules, sizeof(modules) / sizeof(modules[0]));
+
+    for (s32 i = 0; i < module_count; ++i)
     {
-        if (stub->modules[i] != UINT64_MAX)
+        encode_hex(build_id_str, sizeof(build_id_str), modules[i].build_id, sizeof(modules[i].build_id));
+        if (!xfer_printf(stub, entry, build_id_str, modules[i].base_address))
         {
-            if (!xfer_printf(stub, entry, i, stub->modules[i]))
-            {
-                goto err;
-            }
+            goto err;
         }
     }
 

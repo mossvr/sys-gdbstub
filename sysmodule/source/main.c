@@ -46,6 +46,10 @@ void __attribute__((weak)) __appInit(void)
     if (R_FAILED(rc))
         fatalThrow(rc);
 
+    rc = ldrDmntInitialize();
+    if (R_FAILED(rc))
+        fatalThrow(rc);
+
     static const SocketInitConfig socket_config = {
         .bsdsockets_version = 1,
 
@@ -75,6 +79,7 @@ void __attribute__((weak)) __appExit(void)
     // Cleanup default services.
     socketExit();
     smExit();
+    ldrDmntExit();
 }
 
 // Main program entrypoint

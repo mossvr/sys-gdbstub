@@ -15,6 +15,16 @@
 #define logf(fmt, ...)
 #endif
 
+void userAppInit(void)
+{
+    ldrDmntInitialize();
+}
+
+void userAppExit(void)
+{
+    ldrDmntExit();
+}
+
 int main(int argc, char* argv[])
 {
     consoleInit(NULL);
