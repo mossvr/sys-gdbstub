@@ -22,12 +22,14 @@ typedef struct
     bool (*func)(gdb_stub_t* stub, gdb_xfer_req_t* req);
 } gdb_xfer_handler_t;
 
+static bool gdb_stub_xfer_memory_map(gdb_stub_t* stub, gdb_xfer_req_t* req);
 static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req);
 static bool gdb_stub_xfer_threads(gdb_stub_t* stub, gdb_xfer_req_t* req);
 static bool gdb_stub_xfer_libs(gdb_stub_t* stub, gdb_xfer_req_t* req);
 
 static const gdb_xfer_handler_t xfer_handler[] =
 {
+    { "memory-map", gdb_stub_xfer_memory_map },
     { "osdata", gdb_stub_xfer_osdata },
     { "threads", gdb_stub_xfer_threads },
     { "libraries", gdb_stub_xfer_libs },
@@ -228,6 +230,71 @@ err:
     return false;
 }
 
+static bool xfer_snap_memory_map(gdb_stub_t* stub)
+{
+    Result res;
+    MemoryInfo mem_info;
+    uint32_t dummy;
+    uint64_t addr = 0u;
+    uint64_t region_addr = 0u;
+    uint64_t region_size = 0u;
+
+    stub->xfer[0] = '\0';
+    stub->xfer_len = 0u;
+
+    if (!xfer_printf(stub, "%s", "<memory-map>"))
+        goto err;
+
+    while (true)
+    {
+        res = svcQueryDebugProcessMemory(&mem_info, &dummy, stub->session, addr);
+        if (R_FAILED(res))
+            break;
+
+        if (mem_info.addr + mem_info.size <= addr)
+            break;
+
+        if (mem_info.type != MemType_Unmapped &&
+            mem_info.type != MemType_Reserved &&
+            mem_info.perm != 0u)
+        {
+            // combine contiguous regions
+            if (mem_info.addr == region_addr + region_size)
+            {
+                region_size += mem_info.size;
+            }
+            else
+            {
+                if (region_size != 0u)
+                {
+                    if (!xfer_printf(stub, "<memory type=\"ram\" start=\"0x%lx\" length=\"0x%lx\" />", region_addr, region_size))
+                        goto err;
+                }
+
+                region_addr = mem_info.addr;
+                region_size = mem_info.size;
+            }
+        }
+        
+        addr = mem_info.addr + mem_info.size;
+    }
+
+    if (region_size != 0u)
+    {
+        if (!xfer_printf(stub, "<memory type=\"ram\" start=\"0x%lx\" length=\"0x%lx\" />", region_addr, region_size))
+            goto err;
+    }
+    
+    if (!xfer_printf(stub, "%s", "</memory-map>"))
+        goto err;
+
+    return true;
+err:
+    stub->xfer[0] = '\0';
+    stub->xfer_len = 0u;
+    return false;
+}
+
 static bool gdb_stub_send_xfer(gdb_stub_t* stub, size_t offset, size_t length)
 {
     logf("%s\n", __FUNCTION__);
@@ -258,6 +325,23 @@ static bool gdb_stub_send_xfer(gdb_stub_t* stub, size_t offset, size_t length)
     }
 
     return true;
+}
+
+static bool gdb_stub_xfer_memory_map(gdb_stub_t* stub, gdb_xfer_req_t* req)
+{
+    logf("%s\n", __FUNCTION__);
+
+    if (req->offset == 0u)
+    {
+        if (*req->annex != 0u ||
+            !xfer_snap_memory_map(stub))
+        {
+            gdb_stub_send_error(stub, 0u);
+            return true;
+        }
+    }
+
+    return gdb_stub_send_xfer(stub, req->offset, req->length);
 }
 
 static bool gdb_stub_xfer_osdata(gdb_stub_t* stub, gdb_xfer_req_t* req)
