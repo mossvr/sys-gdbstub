@@ -1,8 +1,10 @@
 
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/filio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -221,15 +223,24 @@ bool gdb_server_handle_event(gdb_server_t* server, int idx)
                 }
                 else if((server->fds[i+1u].revents & POLLIN) != 0u)
                 {
-                    ssize_t count = read(client->sock, server->rx_buffer, sizeof(server->rx_buffer));
-                    if(count > 0)
+                    while (true)
                     {
-                        gdb_stub_input(client->stub, server->rx_buffer, count);
-                    }
-                    else
-                    {
-                        gdb_client_destroy(client);
-                        update_fds = true;
+                        ssize_t count = recv(client->sock, server->rx_buffer, sizeof(server->rx_buffer), MSG_DONTWAIT);
+                        if (count > 0)
+                        {
+                            gdb_stub_input(client->stub, server->rx_buffer, count);
+                        }
+                        else if (count == -1 &&
+                            (errno == EAGAIN || errno == EWOULDBLOCK))
+                        {
+                            break;
+                        }
+                        else
+                        {
+                            gdb_client_destroy(client);
+                            update_fds = true;
+                            break;
+                        }
                     }
                 }
             }

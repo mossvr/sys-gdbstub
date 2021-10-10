@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <sys/fcntl.h>
+#include <unistd.h>
 
 #include <switch.h>
 
@@ -44,6 +46,11 @@ gdb_stub_t* gdb_stub_create(gdb_stub_output_t output, void* arg)
     for (int i = 0; i < MAX_MODULES; ++i)
     {
         stub->modules[i] = UINT64_MAX;
+    }
+
+    for (int i = 0; i < MAX_FILES; ++i)
+    {
+        stub->files[i] = -1;
     }
 
     return stub;
@@ -392,6 +399,16 @@ void gdb_stub_destroy(gdb_stub_t* stub)
     if (stub->pid >= 0)
     {
         gdb_stub_detach(stub, stub->pid);
+    }
+
+    // close all files
+    for (int i = 0; i < MAX_FILES; ++i)
+    {
+        if (stub->files[i] != -1)
+        {
+            close(stub->files[i]);
+            stub->files[i] = -1;
+        }
     }
     
     memset(stub, 0, sizeof(*stub));

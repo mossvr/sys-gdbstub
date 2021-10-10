@@ -14,6 +14,7 @@
 #define MAX_THREADS 20u
 #define MAX_SW_BREAKPOINTS 16u
 #define MAX_MODULES 16u
+#define MAX_FILES 16u
 
 #define ARMV8_BRK(imm) (0xD4200000 | (((imm) & 0xFFFF) << 5))
 
@@ -66,6 +67,7 @@ struct gdb_stub
 
     sw_breakpoint_t sw_breakpoints[MAX_SW_BREAKPOINTS];
     uint64_t modules[MAX_MODULES];
+    int files[MAX_FILES];
 
     uint8_t mem[512];
     char xfer[8192];
@@ -73,7 +75,7 @@ struct gdb_stub
 
     struct
     {
-        char packet[2048];
+        char packet[(8*1024) + 1];
         cmd_state_t state;
         size_t pos;
         char checksum_buf[2];
@@ -111,6 +113,7 @@ void gdb_stub_packet_end(gdb_stub_t* stub);
 
 void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length);
 bool gdb_stub_pkt_query(gdb_stub_t* stub, char* packet, size_t length);
+bool gdb_stub_pkt_file(gdb_stub_t* stub, char* packet, size_t length);
 bool gdb_stub_query_xfer(gdb_stub_t* stub, char* packet, size_t length);
 bool gdb_stub_query_rcmd(gdb_stub_t* stub, char* packet, size_t length);
 

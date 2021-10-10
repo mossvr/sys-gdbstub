@@ -47,13 +47,15 @@ static const gdb_pkt_handler_t pkt_handler[] =
         { "?", gdb_stub_pkt_get_halt_reason },
         { "D", gdb_stub_pkt_detach },
         { "vAttach", gdb_stub_pkt_attach },
+        { "vFile", gdb_stub_pkt_file },
 };
 
 void gdb_stub_pkt(gdb_stub_t* stub, char* packet, size_t length)
 {
     bool handled = false;
 
-    logf("got packet (%s)\n", packet);
+    int span = strcspn(packet, ",;:");
+    logf("got packet (%.*s)\n", span, packet);
 
     for(u32 i = 0u; i < sizeof(pkt_handler) / sizeof(pkt_handler[0]); ++i)
     {

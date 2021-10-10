@@ -50,6 +50,12 @@ void __attribute__((weak)) __appInit(void)
     if (R_FAILED(rc))
         fatalThrow(rc);
 
+    rc = fsInitialize();
+    if (R_FAILED(rc))
+        fatalThrow(rc);
+
+    fsdevMountSdmc();
+
     static const SocketInitConfig socket_config = {
         .bsdsockets_version = 1,
 
@@ -78,8 +84,10 @@ void __attribute__((weak)) __appExit(void)
 {
     // Cleanup default services.
     socketExit();
-    smExit();
+    fsdevUnmountAll();
+    fsExit();
     ldrDmntExit();
+    smExit();
 }
 
 // Main program entrypoint
