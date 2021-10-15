@@ -5,7 +5,7 @@
 
 GDB Stub Sysmodule for the Nintendo Switch.
 
-## What works
+## Features
 
 + List running processes
 + Attach/detach from a process
@@ -14,9 +14,6 @@ GDB Stub Sysmodule for the Nintendo Switch.
 + Break/continue
 + List threads and switch between them
 + Breakpoints
-
-## What doesn't work yet
-
 + Single stepping
 
 ## Requirements

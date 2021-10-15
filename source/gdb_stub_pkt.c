@@ -401,12 +401,91 @@ static bool gdb_stub_pkt_continue(gdb_stub_t* stub, char* packet, size_t length)
     return true;
 }
 
+static int32_t sign_extend(uint32_t value, uint32_t bits)
+{
+    int32_t mask = 1u << (bits - 1u);
+    return ((int32_t)value ^ mask) - mask;
+}
+
 static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
 {
     logf("%s\n", __FUNCTION__);
+    Result res;
 
     if (stub->session != INVALID_HANDLE)
     {
+        // get the thread context
+        ThreadContext* ctx = NULL;
+
+        int idx = stub->selected_thread;
+        if (idx < 0 || idx >= MAX_THREADS)
+        {
+            idx = gdb_stub_first_thread_index(stub);
+        }
+
+        ctx = &stub->thread[idx].ctx;
+
+        stub->step_bp[0].address = ctx->pc.x + 4;
+        stub->step_bp[1].address = UINT64_MAX;
+
+        // read the next instruction
+        uint32_t instr = 0u;
+        res = svcReadDebugProcessMemory(&instr, stub->session, ctx->pc.x, sizeof(instr));
+        if (R_SUCCEEDED(res))
+        {
+            if ((instr & 0x7C000000u) == 0x14000000u)
+            {
+                // b/bl
+                stub->step_bp[0].address = UINT64_MAX;
+                stub->step_bp[1].address = ctx->pc.x + sign_extend((instr & 0x03FFFFFFu) << 2u, 28u);
+            }
+            else if ((instr & 0x7E000000u) == 0x34000000u)
+            {
+                // cbz/cbnz
+                stub->step_bp[1].address = ctx->pc.x + sign_extend((instr & 0x00FFFFE0u) >> 3u, 21u);
+            }
+            else if ((instr & 0x7E000000u) == 0x36000000u)
+            {
+                // tbz/tbnz
+                stub->step_bp[1].address = ctx->pc.x + sign_extend((instr & 0x0007FFE0u) >> 3u, 16u);
+            }
+            else if ((instr & 0xFF000010u) == 0x54000000u)
+            {
+                // b.*
+                if ((instr & 0xFu) == 0xEu)
+                {
+                    stub->step_bp[0].address = UINT64_MAX;
+                }
+                stub->step_bp[1].address = ctx->pc.x + sign_extend((instr & 0x00FFFFE0u) >> 3u, 21u);
+            }
+            else if ((instr & 0xFF8FFC1Fu) == 0xD60F0000u)
+            {
+                // b
+                if ((instr & 0x00F00000u) == 0x00300000u)
+                {
+                    stub->step_bp[0].address = UINT64_MAX;
+                }
+
+                uint64_t reg = (instr & 0x03E0u) >> 5u;
+                if (reg < 29u)
+                {
+                    stub->step_bp[1].address = ctx->cpu_gprs[reg].x;
+                }
+                else if (reg == 29u)
+                {
+                    stub->step_bp[1].address = ctx->fp;
+                }
+                else if (reg == 30u)
+                {
+                    stub->step_bp[1].address = ctx->lr;
+                }
+                else if (reg == 31u)
+                {
+                    stub->step_bp[1].address = ctx->sp;
+                }
+            }
+        }
+
         gdb_stub_enable_breakpoints(stub);
         svcContinueDebugEvent(stub->session, 7, NULL, 0u);
     }

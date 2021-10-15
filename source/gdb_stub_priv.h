@@ -66,6 +66,7 @@ struct gdb_stub
     u32 exception_type;
 
     sw_breakpoint_t sw_breakpoints[MAX_SW_BREAKPOINTS];
+    sw_breakpoint_t step_bp[2];
     uint64_t modules[MAX_MODULES];
     int files[MAX_FILES];
 
