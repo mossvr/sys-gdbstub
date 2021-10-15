@@ -171,7 +171,7 @@ static bool gdb_stub_pkt_insert_breakpoint(gdb_stub_t* stub, char* packet, size_
         for (int i = 0; i < MAX_SW_BREAKPOINTS; ++i)
         {
             sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
-            if (bp->address == UINT64_MAX)
+            if (bp->address == 0u)
             {
                 bp->address = addr;
                 bp_set = true;
@@ -213,7 +213,7 @@ static bool gdb_stub_pkt_remove_breakpoint(gdb_stub_t* stub, char* packet, size_
             sw_breakpoint_t* bp = &stub->sw_breakpoints[i];
             if (bp->address == addr)
             {
-                bp->address = UINT64_MAX;
+                bp->address = 0u;
                 bp->value = 0u;
                 break;
             }
@@ -426,7 +426,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
         ctx = &stub->thread[idx].ctx;
 
         stub->step_bp[0].address = ctx->pc.x + 4;
-        stub->step_bp[1].address = UINT64_MAX;
+        stub->step_bp[1].address = 0u;
 
         // read the next instruction
         uint32_t instr = 0u;
@@ -436,7 +436,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
             if ((instr & 0x7C000000u) == 0x14000000u)
             {
                 // b/bl
-                stub->step_bp[0].address = UINT64_MAX;
+                stub->step_bp[0].address = 0u;
                 stub->step_bp[1].address = ctx->pc.x + sign_extend((instr & 0x03FFFFFFu) << 2u, 28u);
             }
             else if ((instr & 0x7E000000u) == 0x34000000u)
@@ -454,7 +454,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
                 // b.*
                 if ((instr & 0xFu) == 0xEu)
                 {
-                    stub->step_bp[0].address = UINT64_MAX;
+                    stub->step_bp[0].address = 0u;
                 }
                 stub->step_bp[1].address = ctx->pc.x + sign_extend((instr & 0x00FFFFE0u) >> 3u, 21u);
             }
@@ -463,7 +463,7 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
                 // b
                 if ((instr & 0x00F00000u) == 0x00300000u)
                 {
-                    stub->step_bp[0].address = UINT64_MAX;
+                    stub->step_bp[0].address = 0u;
                 }
 
                 uint64_t reg = (instr & 0x03E0u) >> 5u;
