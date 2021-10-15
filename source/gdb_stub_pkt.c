@@ -487,7 +487,8 @@ static bool gdb_stub_pkt_step(gdb_stub_t* stub, char* packet, size_t length)
         }
 
         gdb_stub_enable_breakpoints(stub);
-        svcContinueDebugEvent(stub->session, 7, NULL, 0u);
+        u64 tid = stub->thread[idx].tid;
+        svcContinueDebugEvent(stub->session, 3u, &tid, 1u);
     }
 
     return true;

@@ -482,7 +482,7 @@ static void print_debug_event(debug_event_t* event)
         logf("\t%s\n", exit_type_str[event->exit.type]);
         break;
     case DEBUG_EVENT_EXCEPTION:
-        logf("\t%s\n", exception_type_str[event->exception.type]);
+        logf("\t%s (tid=%lu)\n", exception_type_str[event->exception.type], event->thread_id);
         switch(event->exception.type)
         {
         case DEBUG_EXCEPTION_TRAP:
